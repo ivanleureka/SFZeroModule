@@ -166,6 +166,8 @@ SFZeroModule is licensed under the MIT License. See the LICENSE file included wi
 
 SFZeroModule is based on the original SFZero project by Steve Folta and was adapted as a JUCE module by Leo Olivers. For more information, visit the [original SFZero repository](https://github.com/stevefolta/SFZero).
 
+This was then forked by reFX and turned into a JUCE module, which whas then forked by William Cotton to fix some memory issues and was then forked by me to upgrade (partially) to c++ 20 and some additional polyphony changes.
+
 ## Conclusion
 
 SFZeroModule offers a streamlined solution for integrating soundfont playback into your JUCE applications. Whether you’re building a virtual instrument, a sample-based synthesiser, or any audio application that leverages soundfonts, this module provides a flexible and efficient toolkit. Proper memory management is built into the module, ensuring that resources are allocated and deallocated safely as you create and destroy sounds and voices.

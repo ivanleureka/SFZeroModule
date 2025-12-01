@@ -8,6 +8,7 @@
 #define SFZSAMPLE_H_INCLUDED
 
 #include "SFZCommon.h"
+#include <memory>
 
 namespace sfzero
 {
@@ -15,18 +16,23 @@ namespace sfzero
 class Sample
 {
 public:
-  explicit Sample(const juce::File &fileIn) : file_(fileIn), buffer_(nullptr), sampleRate_(0), sampleLength_(0), loopStart_(0), loopEnd_(0) {}
-  explicit Sample(double sampleRateIn) : buffer_(nullptr), sampleRate_(sampleRateIn), sampleLength_(0), loopStart_(0), loopEnd_(0) {}
-  virtual ~Sample();
+  explicit Sample(const juce::File &fileIn) : file_(fileIn), sampleRate_(0), sampleLength_(0), loopStart_(0), loopEnd_(0) {}
+  explicit Sample(double sampleRateIn) : sampleRate_(sampleRateIn), sampleLength_(0), loopStart_(0), loopEnd_(0) {}
+  ~Sample() = default;
 
   bool load(juce::AudioFormatManager *formatManager);
 
   juce::File getFile() { return (file_); }
-  juce::AudioSampleBuffer *getBuffer() { return (buffer_); }
+  juce::AudioSampleBuffer *getBuffer() { return buffer_.get(); }
   double getSampleRate() { return (sampleRate_); }
   juce::String getShortName();
+
+  /** Takes ownership of the buffer. */
   void setBuffer(juce::AudioSampleBuffer *newBuffer);
+
+  /** Releases ownership of the buffer to the caller. */
   juce::AudioSampleBuffer *detachBuffer();
+
   juce::String dump();
   juce::uint64 getSampleLength() const { return sampleLength_; }
   juce::uint64 getLoopStart() const { return loopStart_; }
@@ -34,12 +40,11 @@ public:
 
 #ifdef JUCE_DEBUG
   void checkIfZeroed(const char *where);
-
 #endif
 
 private:
   juce::File file_;
-  juce::AudioSampleBuffer *buffer_;
+  std::unique_ptr<juce::AudioSampleBuffer> buffer_;  ///< Owned sample data
   double sampleRate_;
   juce::uint64 sampleLength_, loopStart_, loopEnd_;
 

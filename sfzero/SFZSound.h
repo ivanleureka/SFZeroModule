@@ -3,6 +3,12 @@
  * Converted to Juce module (C) 2016 Leo Olivers
  * Forked from https://github.com/stevefolta/SFZero
  * For license info please see the LICENSE file distributed with this source code
+ *
+ * OWNERSHIP MODEL:
+ * - This class owns all Region and Sample objects added to it
+ * - regions_: Array of owned Region pointers (deleted in destructor)
+ * - samples_: HashMap of owned Sample pointers (deleted in destructor)
+ * - Samples are accessed via borrowed pointers (do not delete externally)
  *************************************************************************************/
 #ifndef SFZSOUND_H_INCLUDED
 #define SFZSOUND_H_INCLUDED

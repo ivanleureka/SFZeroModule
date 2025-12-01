@@ -9,13 +9,13 @@
 #include "SF2.h"
 #include "SF2Generator.h"
 #include "SF2Sound.h"
+#include <vector>
 
-sfzero::SF2Reader::SF2Reader(sfzero::SF2Sound *soundIn, const juce::File &fileIn) : sound_(soundIn)
+sfzero::SF2Reader::SF2Reader(sfzero::SF2Sound *soundIn, const juce::File &fileIn)
+    : sound_(soundIn)
+    , file_(fileIn.createInputStream())
 {
-  file_ = fileIn.createInputStream().release();
 }
-
-sfzero::SF2Reader::~SF2Reader() { delete file_; }
 
 void sfzero::SF2Reader::read()
 {
@@ -29,17 +29,17 @@ void sfzero::SF2Reader::read()
   sfzero::SF2::Hydra hydra;
   file_->setPosition(0);
   sfzero::RIFFChunk riffChunk;
-  riffChunk.readFrom(file_);
+  riffChunk.readFrom(file_.get());
   while (file_->getPosition() < riffChunk.end())
   {
     sfzero::RIFFChunk chunk;
-    chunk.readFrom(file_);
+    chunk.readFrom(file_.get());
     if (FourCCEquals(chunk.id, "pdta"))
     {
-      hydra.readFrom(file_, chunk.end());
+      hydra.readFrom(file_.get(), chunk.end());
       break;
     }
-    chunk.seekAfter(file_);
+    chunk.seekAfter(file_.get());
   }
   if (!hydra.isComplete())
   {
@@ -190,30 +190,30 @@ juce::AudioSampleBuffer *sfzero::SF2Reader::readSamples(double *progressVar, juc
   // Find the "sdta" chunk.
   file_->setPosition(0);
   sfzero::RIFFChunk riffChunk;
-  riffChunk.readFrom(file_);
+  riffChunk.readFrom(file_.get());
   bool found = false;
   sfzero::RIFFChunk chunk;
   while (file_->getPosition() < riffChunk.end())
   {
-    chunk.readFrom(file_);
+    chunk.readFrom(file_.get());
     if (FourCCEquals(chunk.id, "sdta"))
     {
       found = true;
       break;
     }
-    chunk.seekAfter(file_);
+    chunk.seekAfter(file_.get());
   }
   juce::int64 sdtaEnd = chunk.end();
   found = false;
   while (file_->getPosition() < sdtaEnd)
   {
-    chunk.readFrom(file_);
+    chunk.readFrom(file_.get());
     if (FourCCEquals(chunk.id, "smpl"))
     {
       found = true;
       break;
     }
-    chunk.seekAfter(file_);
+    chunk.seekAfter(file_.get());
   }
   if (!found)
   {
@@ -221,12 +221,12 @@ juce::AudioSampleBuffer *sfzero::SF2Reader::readSamples(double *progressVar, juc
     return nullptr;
   }
 
-  // Allocate the AudioSampleBuffer.
+  // Allocate the AudioSampleBuffer (caller takes ownership)
   int numSamples = int (chunk.size / sizeof(short));
-  juce::AudioSampleBuffer *sampleBuffer = new juce::AudioSampleBuffer(1, numSamples);
+  auto sampleBuffer = std::make_unique<juce::AudioSampleBuffer>(1, numSamples);
 
-  // Read and convert.
-  short *buffer = new short[bufferSize];
+  // Read and convert using RAII buffer
+  std::vector<short> buffer(bufferSize);
   int samplesLeft = numSamples;
   float *out = sampleBuffer->getWritePointer(0);
   while (samplesLeft > 0)
@@ -237,11 +237,11 @@ juce::AudioSampleBuffer *sfzero::SF2Reader::readSamples(double *progressVar, juc
     {
       samplesToRead = samplesLeft;
     }
-    file_->read(buffer, samplesToRead * sizeof(short));
+    file_->read(buffer.data(), samplesToRead * sizeof(short));
 
     // Convert from signed 16-bit to float.
     int samplesToConvert = samplesToRead;
-    short *in = buffer;
+    short *in = buffer.data();
     for (; samplesToConvert > 0; --samplesToConvert)
     {
       // If we ever need to compile for big-endian platforms, we'll need to
@@ -257,19 +257,16 @@ juce::AudioSampleBuffer *sfzero::SF2Reader::readSamples(double *progressVar, juc
     }
     if (thread && thread->threadShouldExit())
     {
-      delete[] buffer;
-      delete sampleBuffer;
-      return nullptr;
+      return nullptr;  // RAII handles cleanup
     }
   }
-  delete[] buffer;
 
   if (progressVar)
   {
     *progressVar = 1.0;
   }
 
-  return sampleBuffer;
+  return sampleBuffer.release();  // Transfer ownership to caller
 }
 
 void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, sfzero::SF2::genAmountType *amount, sfzero::Region *region)

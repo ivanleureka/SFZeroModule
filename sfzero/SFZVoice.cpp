@@ -8,6 +8,7 @@
 #include "SFZRegion.h"
 #include "SFZSample.h"
 #include "SFZSound.h"
+#include "SF2SoundInstance.h"
 #include "SFZVoice.h"
 #include <math.h>
 
@@ -22,24 +23,39 @@ sfzero::Voice::Voice()
 
 sfzero::Voice::~Voice() {}
 
-bool sfzero::Voice::canPlaySound(juce::SynthesiserSound *sound) { return dynamic_cast<sfzero::Sound *>(sound) != nullptr; }
+bool sfzero::Voice::canPlaySound(juce::SynthesiserSound *sound)
+{
+  // Support both regular Sound and SF2SoundInstance
+  return dynamic_cast<sfzero::Sound *>(sound) != nullptr
+      || dynamic_cast<sfzero::SF2SoundInstance *>(sound) != nullptr;
+}
 
 void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::SynthesiserSound *soundIn,
                               int currentPitchWheelPosition)
 {
+  // Try regular Sound first, then SF2SoundInstance
   sfzero::Sound *sound = dynamic_cast<sfzero::Sound *>(soundIn);
+  sfzero::SF2SoundInstance *soundInstance = nullptr;
 
   if (sound == nullptr)
   {
-    killNote();
-    return;
+    soundInstance = dynamic_cast<sfzero::SF2SoundInstance *>(soundIn);
+    if (soundInstance == nullptr)
+    {
+      killNote();
+      return;
+    }
   }
 
   int velocity = static_cast<int>(floatVelocity * 127.0);
   curVelocity_ = velocity;
   if (region_ == nullptr)
   {
-    region_ = sound->getRegionFor(midiNoteNumber, velocity);
+    // Get region from whichever type of sound we have
+    if (sound)
+      region_ = sound->getRegionFor(midiNoteNumber, velocity);
+    else
+      region_ = soundInstance->getRegionFor(midiNoteNumber, velocity);
   }
   if ((region_ == nullptr) || (region_->sample == nullptr) || (region_->sample->getBuffer() == nullptr))
   {

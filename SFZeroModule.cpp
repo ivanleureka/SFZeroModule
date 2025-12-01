@@ -2,12 +2,13 @@
 // and your header search path must make it accessible to the module's files.
 
 //#include "AppConfig.h"
-#include "SFZero.h"
+#include "SFZeroModule.h"
 #include "sfzero/RIFF.cpp" 
 #include "sfzero/SF2.cpp" 
 #include "sfzero/SF2Generator.cpp" 
 #include "sfzero/SF2Reader.cpp" 
-#include "sfzero/SF2Sound.cpp" 
+#include "sfzero/SF2Sound.cpp"
+#include "sfzero/SF2SoundInstance.cpp"
 #include "sfzero/SFZDebug.cpp" 
 #include "sfzero/SFZEG.cpp" 
 #include "sfzero/SFZReader.cpp" 

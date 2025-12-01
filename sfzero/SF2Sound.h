@@ -3,6 +3,13 @@
  * Converted to Juce module (C) 2016 Leo Olivers
  * Forked from https://github.com/stevefolta/SFZero
  * For license info please see the LICENSE file distributed with this source code
+ *
+ * OWNERSHIP MODEL:
+ * - presets_: OwnedArray of Preset objects (auto-deleted)
+ * - samplesByRate_: HashMap of owned Sample pointers (manually deleted in destructor)
+ * - All Samples share ONE AudioSampleBuffer (complex shared ownership)
+ * - Destructor detaches shared buffer before deleting to avoid double-free
+ * - Do NOT delete Sample objects externally; let SF2Sound manage them
  *************************************************************************************/
 #ifndef SF2SOUND_H_INCLUDED
 #define SF2SOUND_H_INCLUDED
@@ -41,6 +48,11 @@ public:
 
   Sample *sampleFor(double sampleRate);
   void setSamplesBuffer(juce::AudioSampleBuffer *buffer);
+
+  // Access to presets for instancing (SF2SoundInstance)
+  int getNumPresets() const { return presets_.size(); }
+  Preset* getPreset(int index) { return presets_[index]; }
+  const Preset* getPreset(int index) const { return presets_[index]; }
 
 private:
   juce::OwnedArray<Preset> presets_;

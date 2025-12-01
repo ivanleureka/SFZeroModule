@@ -67,25 +67,6 @@ void sfzero::SF2::shdr::readFrom(juce::InputStream *file)
 #include "sf2-chunks/shdr.h"
 }
 
-sfzero::SF2::Hydra::Hydra()
-    : phdrItems(nullptr), pbagItems(nullptr), pmodItems(nullptr), pgenItems(nullptr), instItems(nullptr), ibagItems(nullptr),
-      imodItems(nullptr), igenItems(nullptr), shdrItems(nullptr), phdrNumItems(0), pbagNumItems(0), pmodNumItems(0), pgenNumItems(0), 
-      instNumItems(0), ibagNumItems(0), imodNumItems(0), igenNumItems(0), shdrNumItems(0)
-  {
-}
-sfzero::SF2::Hydra::~Hydra()
-{
-  delete phdrItems;
-  delete pbagItems;
-  delete pmodItems;
-  delete pgenItems;
-  delete instItems;
-  delete ibagItems;
-  delete imodItems;
-  delete igenItems;
-  delete shdrItems;
-}
-
 void sfzero::SF2::Hydra::readFrom(juce::InputStream *file, juce::int64 pdtaChunkEnd)
 {
   int i, numItems;
@@ -95,7 +76,7 @@ void sfzero::SF2::Hydra::readFrom(juce::InputStream *file, juce::int64 pdtaChunk
   {                                                                                                                              \
     numItems = int (chunk.size / SF2::chunkName::sizeInFile);                                                                    \
     chunkName##NumItems = numItems;                                                                                              \
-    chunkName##Items = new SF2::chunkName[numItems];                                                                             \
+    chunkName##Items = std::make_unique<SF2::chunkName[]>(numItems);                                                             \
     for (i = 0; i < numItems; ++i)                                                                                               \
     {                                                                                                                            \
       chunkName##Items[i].readFrom(file);                                                                                        \

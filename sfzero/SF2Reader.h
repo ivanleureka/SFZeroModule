@@ -8,6 +8,7 @@
 #define SF2READER_H_INCLUDED
 
 #include "SF2.h"
+#include <memory>
 
 namespace sfzero
 {
@@ -20,14 +21,17 @@ class SF2Reader
 {
 public:
   SF2Reader(SF2Sound *sound, const juce::File &file);
-  virtual ~SF2Reader();
+  ~SF2Reader() = default;
 
   void read();
+
+  /** Read sample data from the SF2 file.
+      @return Caller takes ownership of the returned buffer (use unique_ptr to manage). */
   juce::AudioSampleBuffer *readSamples(double *progressVar = nullptr, juce::Thread *thread = nullptr);
 
 private:
-  SF2Sound *sound_;
-  juce::FileInputStream *file_;
+  SF2Sound *sound_;                                ///< Borrowed pointer (not owned)
+  std::unique_ptr<juce::InputStream> file_;        ///< Owned file stream
 
   void addGeneratorToRegion(word genOper, SF2::genAmountType *amount, Region *region);
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SF2Reader)

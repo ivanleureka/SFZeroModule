@@ -7,7 +7,7 @@
 
  BEGIN_JUCE_MODULE_DECLARATION
 
-  ID:                   SFZero
+  ID:                   SFZeroModule
   vendor:               altalogix
   version:              2.0.2
   name:                 SFZero
@@ -30,6 +30,7 @@
 #include "sfzero/SF2Generator.h"
 #include "sfzero/SF2Reader.h"
 #include "sfzero/SF2Sound.h"
+#include "sfzero/SF2SoundInstance.h"
 #include "sfzero/SF2WinTypes.h"
 #include "sfzero/SFZCommon.h"
 #include "sfzero/SFZDebug.h"

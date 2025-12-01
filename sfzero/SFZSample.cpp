@@ -9,7 +9,7 @@
 
 bool sfzero::Sample::load(juce::AudioFormatManager *formatManager)
 {
-  juce::AudioFormatReader *reader = formatManager->createReaderFor(file_);
+  std::unique_ptr<juce::AudioFormatReader> reader(formatManager->createReaderFor(file_));
 
   if (reader == nullptr)
   {
@@ -21,8 +21,8 @@ bool sfzero::Sample::load(juce::AudioFormatManager *formatManager)
   // can be done without having to check for the edge all the time.
   jassert(sampleLength_ < std::numeric_limits<int>::max());
 
-  buffer_ = new juce::AudioSampleBuffer(reader->numChannels, static_cast<int>(sampleLength_ + 4));
-  reader->read(buffer_, 0, static_cast<int>(sampleLength_ + 4), 0, true, true);
+  buffer_ = std::make_unique<juce::AudioSampleBuffer>(reader->numChannels, static_cast<int>(sampleLength_ + 4));
+  reader->read(buffer_.get(), 0, static_cast<int>(sampleLength_ + 4), 0, true, true);
 
   juce::StringPairArray *metadata = &reader->metadataValues;
   int numLoops = metadata->getValue("NumSampleLoops", "0").getIntValue();
@@ -31,25 +31,20 @@ bool sfzero::Sample::load(juce::AudioFormatManager *formatManager)
     loopStart_ = metadata->getValue("Loop0Start", "0").getLargeIntValue();
     loopEnd_ = metadata->getValue("Loop0End", "0").getLargeIntValue();
   }
-  delete reader;
   return true;
 }
-
-sfzero::Sample::~Sample() { delete buffer_; }
 
 juce::String sfzero::Sample::getShortName() { return (file_.getFileName()); }
 
 void sfzero::Sample::setBuffer(juce::AudioSampleBuffer *newBuffer)
 {
-  buffer_ = newBuffer;
-  sampleLength_ = buffer_->getNumSamples();
+  buffer_.reset(newBuffer);
+  sampleLength_ = buffer_ ? buffer_->getNumSamples() : 0;
 }
 
 juce::AudioSampleBuffer *sfzero::Sample::detachBuffer()
 {
-  juce::AudioSampleBuffer *result = buffer_;
-  buffer_ = nullptr;
-  return result;
+  return buffer_.release();
 }
 
 juce::String sfzero::Sample::dump() { return file_.getFullPathName() + "\n"; }
@@ -57,7 +52,7 @@ juce::String sfzero::Sample::dump() { return file_.getFullPathName() + "\n"; }
 #ifdef JUCE_DEBUG
 void sfzero::Sample::checkIfZeroed(const char *where)
 {
-  if (buffer_ == nullptr)
+  if (!buffer_)
   {
     sfzero::dbgprintf("SFZSample::checkIfZeroed(%s): no buffer!", where);
     return;

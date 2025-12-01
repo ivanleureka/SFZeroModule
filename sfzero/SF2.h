@@ -8,6 +8,7 @@
 #define SF2_H_INCLUDED
 
 #include "SF2WinTypes.h"
+#include <memory>
 
 #define SF2Field(type, name) type name;
 
@@ -108,22 +109,22 @@ struct shdr
 
 struct Hydra
 {
-  phdr *phdrItems;
-  pbag *pbagItems;
-  pmod *pmodItems;
-  pgen *pgenItems;
-  inst *instItems;
-  ibag *ibagItems;
-  imod *imodItems;
-  igen *igenItems;
-  shdr *shdrItems;
+  std::unique_ptr<phdr[]> phdrItems;
+  std::unique_ptr<pbag[]> pbagItems;
+  std::unique_ptr<pmod[]> pmodItems;
+  std::unique_ptr<pgen[]> pgenItems;
+  std::unique_ptr<inst[]> instItems;
+  std::unique_ptr<ibag[]> ibagItems;
+  std::unique_ptr<imod[]> imodItems;
+  std::unique_ptr<igen[]> igenItems;
+  std::unique_ptr<shdr[]> shdrItems;
 
-  int phdrNumItems, pbagNumItems, pmodNumItems, pgenNumItems;
-  int instNumItems, ibagNumItems, imodNumItems, igenNumItems;
-  int shdrNumItems;
+  int phdrNumItems = 0, pbagNumItems = 0, pmodNumItems = 0, pgenNumItems = 0;
+  int instNumItems = 0, ibagNumItems = 0, imodNumItems = 0, igenNumItems = 0;
+  int shdrNumItems = 0;
 
-  Hydra();
-  ~Hydra();
+  Hydra() = default;
+  ~Hydra() = default;
 
   void readFrom(juce::InputStream *file, juce::int64 pdtaChunkEnd);
   bool isComplete();
