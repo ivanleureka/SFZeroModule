@@ -23,6 +23,7 @@ class SF2Sound : public Sound
 {
 public:
   explicit SF2Sound(const juce::File &file);
+  SF2Sound(const void* data, size_t dataSize);
   virtual ~SF2Sound() override;
 
   void loadRegions() override;
@@ -58,6 +59,10 @@ private:
   juce::OwnedArray<Preset> presets_;
   juce::HashMap<int, Sample *> samplesByRate_;
   int selectedPreset_;
+
+  // For memory-based loading (e.g., from BinaryData)
+  std::unique_ptr<juce::MemoryInputStream> memoryStream_;
+
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SF2Sound)
 };
 }

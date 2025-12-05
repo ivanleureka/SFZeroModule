@@ -21,6 +21,7 @@ class SF2Reader
 {
 public:
   SF2Reader(SF2Sound *sound, const juce::File &file);
+  SF2Reader(SF2Sound *sound, std::unique_ptr<juce::InputStream> stream);
   ~SF2Reader() = default;
 
   void read();

@@ -8,7 +8,19 @@
 #include "SF2Reader.h"
 #include "SFZSample.h"
 
-sfzero::SF2Sound::SF2Sound(const juce::File &file) : sfzero::Sound(file), selectedPreset_(0) {}
+sfzero::SF2Sound::SF2Sound(const juce::File &file)
+    : sfzero::Sound(file)
+    , selectedPreset_(0)
+    , memoryStream_(nullptr)
+{
+}
+
+sfzero::SF2Sound::SF2Sound(const void* data, size_t dataSize)
+    : sfzero::Sound(juce::File())  // Dummy file for base class
+    , selectedPreset_(0)
+    , memoryStream_(std::make_unique<juce::MemoryInputStream>(data, dataSize, false))
+{
+}
 
 sfzero::SF2Sound::~SF2Sound()
 {
@@ -54,9 +66,23 @@ public:
 
 void sfzero::SF2Sound::loadRegions()
 {
-  sfzero::SF2Reader reader(this, getFile());
-
-  reader.read();
+  // Create reader either from memory or file
+  if (memoryStream_)
+  {
+    // Create a new MemoryInputStream from the same data
+    auto stream = std::make_unique<juce::MemoryInputStream>(
+      memoryStream_->getData(),
+      memoryStream_->getDataSize(),
+      false
+    );
+    sfzero::SF2Reader reader(this, std::move(stream));
+    reader.read();
+  }
+  else
+  {
+    sfzero::SF2Reader reader(this, getFile());
+    reader.read();
+  }
 
   // Sort the presets.
   PresetComparator comparator;
@@ -67,8 +93,25 @@ void sfzero::SF2Sound::loadRegions()
 
 void sfzero::SF2Sound::loadSamples(juce::AudioFormatManager * /*formatManager*/, double *progressVar, juce::Thread *thread)
 {
-  sfzero::SF2Reader reader(this, getFile());
-  juce::AudioSampleBuffer *buffer = reader.readSamples(progressVar, thread);
+  juce::AudioSampleBuffer *buffer = nullptr;
+
+  // Create reader either from memory or file
+  if (memoryStream_)
+  {
+    // Create a new MemoryInputStream from the same data
+    auto stream = std::make_unique<juce::MemoryInputStream>(
+      memoryStream_->getData(),
+      memoryStream_->getDataSize(),
+      false
+    );
+    sfzero::SF2Reader reader(this, std::move(stream));
+    buffer = reader.readSamples(progressVar, thread);
+  }
+  else
+  {
+    sfzero::SF2Reader reader(this, getFile());
+    buffer = reader.readSamples(progressVar, thread);
+  }
 
   if (buffer)
   {

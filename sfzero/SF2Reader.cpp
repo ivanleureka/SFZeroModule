@@ -17,6 +17,12 @@ sfzero::SF2Reader::SF2Reader(sfzero::SF2Sound *soundIn, const juce::File &fileIn
 {
 }
 
+sfzero::SF2Reader::SF2Reader(sfzero::SF2Sound *soundIn, std::unique_ptr<juce::InputStream> stream)
+    : sound_(soundIn)
+    , file_(std::move(stream))
+{
+}
+
 void sfzero::SF2Reader::read()
 {
   if (file_ == nullptr)
