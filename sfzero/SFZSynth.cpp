@@ -235,3 +235,59 @@ juce::String sfzero::Synth::voiceInfoString()
   lines.insert(0, "voices used: " + juce::String(numUsed));
   return lines.joinIntoString("\n");
 }
+
+//==============================================================================
+// Voice Pool Support
+
+sfzero::Voice* sfzero::Synth::releaseVoice(int index)
+{
+  const juce::ScopedLock locker(lock);
+
+  if (index < 0 || index >= voices.size())
+    return nullptr;
+
+  // Stop the voice if it's playing
+  auto* voice = voices.getUnchecked(index);
+  if (voice->getCurrentlyPlayingNote() >= 0)
+  {
+    voice->stopNote(0.0f, false);
+  }
+
+  // Release from OwnedArray without deleting
+  // OwnedArray::removeAndReturn() removes the item and returns it without deleting
+  return dynamic_cast<sfzero::Voice*>(voices.removeAndReturn(index));
+}
+
+std::vector<sfzero::Voice*> sfzero::Synth::releaseAllVoices()
+{
+  const juce::ScopedLock locker(lock);
+
+  std::vector<sfzero::Voice*> released;
+  released.reserve(static_cast<size_t>(voices.size()));
+
+  // Stop all voices and release them
+  while (voices.size() > 0)
+  {
+    auto* voice = voices.getUnchecked(0);
+    if (voice->getCurrentlyPlayingNote() >= 0)
+    {
+      voice->stopNote(0.0f, false);
+    }
+
+    auto* releasedVoice = dynamic_cast<sfzero::Voice*>(voices.removeAndReturn(0));
+    if (releasedVoice)
+    {
+      released.push_back(releasedVoice);
+    }
+  }
+
+  return released;
+}
+
+sfzero::Voice* sfzero::Synth::getVoiceAt(int index) const
+{
+  if (index < 0 || index >= voices.size())
+    return nullptr;
+
+  return dynamic_cast<sfzero::Voice*>(voices.getUnchecked(index));
+}

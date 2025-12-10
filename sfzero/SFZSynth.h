@@ -12,6 +12,8 @@
 namespace sfzero
 {
 
+class Voice;
+
 class Synth : public juce::Synthesiser
 {
 public:
@@ -23,6 +25,34 @@ public:
 
   int numVoicesUsed();
   juce::String voiceInfoString();
+
+  //==============================================================================
+  /** Voice Pool Support
+      These methods allow external ownership of voices for real-time safe voice
+      management. Voices can be pre-allocated in a pool and transferred to/from
+      synths without allocating on the audio thread.
+  */
+
+  /** Release a voice from this synth without deleting it.
+      Returns the voice pointer and removes it from the internal array.
+      Caller takes ownership and is responsible for deletion.
+      @param index  The index of the voice to release (0 to getNumVoices()-1)
+      @return       The released voice, or nullptr if index is invalid
+  */
+  Voice* releaseVoice(int index);
+
+  /** Release all voices from this synth without deleting them.
+      Returns the voices in a vector, caller takes ownership.
+      The synth will have zero voices after this call.
+      @return  Vector of released voice pointers
+  */
+  std::vector<Voice*> releaseAllVoices();
+
+  /** Get a voice by index (const access for inspection).
+      @param index  The index of the voice
+      @return       The voice at the given index, or nullptr if invalid
+  */
+  Voice* getVoiceAt(int index) const;
 
 private:
   int noteVelocities_[128];
