@@ -82,12 +82,8 @@ void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::Syn
   velocityGainDB *= region_->amp_veltrack / 100.0;
   noteGainDB += velocityGainDB;
   noteGainLeft_ = noteGainRight_ = static_cast<float>(juce::Decibels::decibelsToGain(noteGainDB));
-  // The SFZ spec is silent about the pan curve, but a 3dB pan law seems
-  // common.  This sqrt() curve matches what Dimension LE does; Alchemy Free
-  // seems closer to sin(adjustedPan * pi/2).
-  double adjustedPan = (region_->pan + 100.0) / 200.0;
-  noteGainLeft_ *= static_cast<float>(sqrt(1.0 - adjustedPan));
-  noteGainRight_ *= static_cast<float>(sqrt(adjustedPan));
+  // Region pan from SF2/SFZ is intentionally ignored - pan is sourced from MIDI
+  // CC10 at the channel-mix stage in SFZeroAudioProcessor::processBlock.
   ampeg_.startNote(&region_->ampeg, floatVelocity, getSampleRate(), &region_->ampeg_veltrack);
 
   // Offset/end.
