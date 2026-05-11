@@ -21,7 +21,7 @@ bool sfzero::Sample::load(juce::AudioFormatManager *formatManager)
   // can be done without having to check for the edge all the time.
   jassert(sampleLength_ < std::numeric_limits<int>::max());
 
-  buffer_ = std::make_unique<juce::AudioSampleBuffer>(reader->numChannels, static_cast<int>(sampleLength_ + 4));
+  buffer_ = std::make_shared<juce::AudioSampleBuffer>(reader->numChannels, static_cast<int>(sampleLength_ + 4));
   reader->read(buffer_.get(), 0, static_cast<int>(sampleLength_ + 4), 0, true, true);
 
   juce::StringPairArray *metadata = &reader->metadataValues;
@@ -36,15 +36,10 @@ bool sfzero::Sample::load(juce::AudioFormatManager *formatManager)
 
 juce::String sfzero::Sample::getShortName() { return (file_.getFileName()); }
 
-void sfzero::Sample::setBuffer(juce::AudioSampleBuffer *newBuffer)
+void sfzero::Sample::setBuffer(std::shared_ptr<juce::AudioSampleBuffer> newBuffer)
 {
-  buffer_.reset(newBuffer);
+  buffer_ = std::move(newBuffer);
   sampleLength_ = buffer_ ? buffer_->getNumSamples() : 0;
-}
-
-juce::AudioSampleBuffer *sfzero::Sample::detachBuffer()
-{
-  return buffer_.release();
 }
 
 juce::String sfzero::Sample::dump() { return file_.getFullPathName() + "\n"; }

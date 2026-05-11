@@ -5,15 +5,17 @@
  * For license info please see the LICENSE file distributed with this source code
  *
  * OWNERSHIP MODEL:
- * - This class owns all Region and Sample objects added to it
- * - regions_: Array of owned Region pointers (deleted in destructor)
- * - samples_: HashMap of owned Sample pointers (deleted in destructor)
- * - Samples are accessed via borrowed pointers (do not delete externally)
+ * - samplesStorage_ is the single owner of all Sample objects (juce::OwnedArray).
+ * - samplesByPath_ is a lookup map of borrowed Sample* (do not delete via map).
+ * - regions_ is a non-owning view of currently-active Region pointers; ownership
+ *   lives in sfzOwnedRegions_ (SFZ path) or in SF2Sound::Preset::regions (SF2 path).
+ * - Samples and Regions are exposed via borrowed pointers; callers must not delete.
  *************************************************************************************/
 #ifndef SFZSOUND_H_INCLUDED
 #define SFZSOUND_H_INCLUDED
 
 #include "SFZRegion.h"
+#include <memory>
 
 namespace sfzero
 {
@@ -31,7 +33,7 @@ public:
   bool appliesToNote(int midiNoteNumber) override;
   bool appliesToChannel(int midiChannel) override;
 
-  void addRegion(Region *region); // Takes ownership of the region.
+  void addRegion(std::unique_ptr<Region> region); // Takes ownership of the region.
   Sample *addSample(juce::String path, juce::String defaultPath = {});
   void addError(const juce::String &message);
   void addUnsupportedOpcode(const juce::String &opcode);
@@ -41,11 +43,12 @@ public:
                            juce::Thread *thread = nullptr);
 
   Region *getRegionFor(int note, int velocity, Region::Trigger trigger = Region::attack);
-  int getNumRegions();
-  Region *regionAt(int index);
+  int getNumRegions() const noexcept { return regions_.size(); }
+  Region *regionAt(int index) const noexcept { return regions_[index]; }
 
-  const juce::StringArray &getErrors() { return errors_; }
-  const juce::StringArray &getWarnings() { return warnings_; }
+  const juce::StringArray &getErrors() const noexcept { return errors_; }
+  const juce::StringArray &getWarnings() const noexcept { return warnings_; }
+  juce::StringArray getUnsupportedOpcodes();
 
   virtual int numSubsounds();
   virtual juce::String subsoundName(int whichSubsound);
@@ -53,13 +56,16 @@ public:
   virtual int selectedSubsound();
 
   juce::String dump();
-  juce::Array<Region *> &getRegions() { return regions_; }
-  juce::File &getFile() { return file_; }
+  juce::Array<Region *> &getRegions() noexcept { return regions_; }
+  const juce::Array<Region *> &getRegions() const noexcept { return regions_; }
+  juce::File &getFile() noexcept { return file_; }
 
 private:
   juce::File file_;
-  juce::Array<Region *> regions_;
-  juce::HashMap<juce::String, Sample *> samples_;
+  juce::Array<Region *> regions_;                       ///< Borrowed view; ownership lives in sfzOwnedRegions_ or Preset::regions.
+  juce::OwnedArray<Region> sfzOwnedRegions_;            ///< Owns Regions added via addRegion() (SFZ path; empty for SF2).
+  juce::OwnedArray<Sample> samplesStorage_;             ///< Sole owner of Sample objects.
+  juce::HashMap<juce::String, Sample *> samplesByPath_; ///< Borrowed lookup keyed by full path.
   juce::StringArray errors_;
   juce::StringArray warnings_;
   juce::HashMap<juce::String, juce::String> unsupportedOpcodes_;

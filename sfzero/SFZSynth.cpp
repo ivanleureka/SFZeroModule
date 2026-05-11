@@ -33,26 +33,39 @@ void sfzero::Synth::noteOn(int midiChannel, int midiNoteNumber, float velocity)
     }
   }
 
-  // First, stop any currently-playing sounds in the group.
-  //*** Currently, this only pays attention to the first matching region.
-  int group = 0;
-  sfzero::Region *regionForGroup = nullptr;
-
+  // First, stop any currently-playing sounds in any group this note triggers.
+  // Phase C (V1 fix): a single MIDI note may match multiple regions
+  // (multi-layered drums in particular), and each can declare a distinct group.
+  // We must collect *all* the group IDs from matching regions and silence any
+  // voice whose off_by points at any of them - not just the first match.
+  juce::SortedSet<int> groupsTriggered;
+  const sfzero::Region::Trigger groupCheckTrigger = sfzero::Region::first;
   if (sound)
   {
-    regionForGroup = sound->getRegionFor(midiNoteNumber, midiVelocity);
+    const int numRegions = sound->getNumRegions();
+    for (int r = 0; r < numRegions; ++r)
+    {
+      sfzero::Region *region = sound->regionAt(r);
+      if (region && region->matches(midiNoteNumber, midiVelocity, groupCheckTrigger) && region->group != 0)
+      {
+        groupsTriggered.add(region->group);
+      }
+    }
   }
   else if (soundInstance)
   {
-    regionForGroup = soundInstance->getRegionFor(midiNoteNumber, midiVelocity);
+    const int numRegions = soundInstance->getNumRegions();
+    for (int r = 0; r < numRegions; ++r)
+    {
+      sfzero::Region *region = soundInstance->regionAt(r);
+      if (region && region->matches(midiNoteNumber, midiVelocity, groupCheckTrigger) && region->group != 0)
+      {
+        groupsTriggered.add(region->group);
+      }
+    }
   }
 
-  if (regionForGroup)
-  {
-    group = regionForGroup->group;
-  }
-
-  if (group != 0)
+  if (!groupsTriggered.isEmpty())
   {
     for (i = voices.size(); --i >= 0;)
     {
@@ -61,7 +74,8 @@ void sfzero::Synth::noteOn(int midiChannel, int midiNoteNumber, float velocity)
       {
         continue;
       }
-      if (voice->getOffBy() == group)
+      const int voiceOffBy = static_cast<int>(voice->getOffBy());
+      if (voiceOffBy != 0 && groupsTriggered.contains(voiceOffBy))
       {
         voice->stopNoteForGroup();
       }

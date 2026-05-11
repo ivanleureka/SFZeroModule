@@ -5,8 +5,32 @@
  * For license info please see the LICENSE file distributed with this source code
  *************************************************************************************/
 #include "SFZEG.h"
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
 static const float fastReleaseTime = 0.01f;
+
+namespace
+{
+// Convert (seconds * sampleRate) into a non-negative int, capped at INT_MAX/2
+// so callers can decrement / divide the result without UB on pathological SF2
+// timecents. Returns 0 for non-positive inputs.
+inline int timeToSamples(double seconds, double sampleRate)
+{
+  if (!(seconds > 0.0) || !(sampleRate > 0.0))
+  {
+    return 0;
+  }
+  double samples = seconds * sampleRate;
+  constexpr double kMaxSamples = static_cast<double>(std::numeric_limits<int>::max()) / 2.0;
+  if (samples > kMaxSamples)
+  {
+    return static_cast<int>(kMaxSamples);
+  }
+  return static_cast<int>(samples);
+}
+}
 
 sfzero::EG::EG()
     : segment_(), sampleRate_(0), exponentialDecay_(false), level_(0), slope_(0), samplesUntilNextSegment_(0), segmentIsExponential_(false)
@@ -77,7 +101,7 @@ void sfzero::EG::noteOff() { startRelease(); }
 void sfzero::EG::fastRelease()
 {
   segment_ = Release;
-  samplesUntilNextSegment_ = static_cast<int>(fastReleaseTime * sampleRate_);
+  samplesUntilNextSegment_ = timeToSamples(fastReleaseTime, sampleRate_);
   slope_ = -level_ / samplesUntilNextSegment_;
   segmentIsExponential_ = false;
 }
@@ -93,7 +117,7 @@ void sfzero::EG::startDelay()
     segment_ = Delay;
     level_ = 0.0;
     slope_ = 0.0;
-    samplesUntilNextSegment_ = static_cast<int>(parameters_.delay * sampleRate_);
+    samplesUntilNextSegment_ = timeToSamples(parameters_.delay, sampleRate_);
     segmentIsExponential_ = false;
   }
 }
@@ -108,7 +132,7 @@ void sfzero::EG::startAttack()
   {
     segment_ = Attack;
     level_ = parameters_.start / 100.0f;
-    samplesUntilNextSegment_ = static_cast<int>(parameters_.attack * sampleRate_);
+    samplesUntilNextSegment_ = timeToSamples(parameters_.attack, sampleRate_);
     slope_ = 1.0f / samplesUntilNextSegment_;
     segmentIsExponential_ = false;
   }
@@ -124,7 +148,7 @@ void sfzero::EG::startHold()
   else
   {
     segment_ = Hold;
-    samplesUntilNextSegment_ = static_cast<int>(parameters_.hold * sampleRate_);
+    samplesUntilNextSegment_ = timeToSamples(parameters_.hold, sampleRate_);
     level_ = 1.0;
     slope_ = 0.0;
     segmentIsExponential_ = false;
@@ -140,7 +164,7 @@ void sfzero::EG::startDecay()
   else
   {
     segment_ = Decay;
-    samplesUntilNextSegment_ = static_cast<int>(parameters_.decay * sampleRate_);
+    samplesUntilNextSegment_ = timeToSamples(parameters_.decay, sampleRate_);
     level_ = 1.0;
     if (exponentialDecay_)
     {
@@ -155,10 +179,24 @@ void sfzero::EG::startDecay()
         // get to zero, not to the sustain level.  The SFZ spec is not that
         // specific about what "decay" means, so perhaps it's really supposed
         // to specify the time to reach the sustain level.
-        samplesUntilNextSegment_ = static_cast<int>(log((parameters_.sustain / 100.0) / level_) / mysterySlope);
-        if (samplesUntilNextSegment_ <= 0)
+        // Clamp inputs so log() can't produce NaN/-Inf when level_ is at or
+        // near zero or sustain is pathological.
+        constexpr double kEpsilon = 1.0e-6;
+        double numerator = std::max(parameters_.sustain / 100.0, kEpsilon);
+        double denominator = std::max(static_cast<double>(level_), kEpsilon);
+        double samplesD = std::log(numerator / denominator) / mysterySlope;
+        if (!std::isfinite(samplesD) || samplesD <= 0.0)
         {
           startSustain();
+        }
+        else
+        {
+          constexpr double kMaxSamples = static_cast<double>(std::numeric_limits<int>::max()) / 2.0;
+          samplesUntilNextSegment_ = static_cast<int>(std::min(samplesD, kMaxSamples));
+          if (samplesUntilNextSegment_ <= 0)
+          {
+            startSustain();
+          }
         }
       }
     }
@@ -197,7 +235,7 @@ void sfzero::EG::startRelease()
   }
 
   segment_ = Release;
-  samplesUntilNextSegment_ = static_cast<int>(release * sampleRate_);
+  samplesUntilNextSegment_ = timeToSamples(release, sampleRate_);
   if (exponentialDecay_)
   {
     // I don't truly understand this; just following what LinuxSampler does.
@@ -213,3 +251,18 @@ void sfzero::EG::startRelease()
 }
 
 const float sfzero::EG::BottomLevel = 0.001f;
+
+const char *sfzero::EG::segmentName() const noexcept
+{
+  switch (segment_)
+  {
+  case Delay:   return "delay";
+  case Attack:  return "attack";
+  case Hold:    return "hold";
+  case Decay:   return "decay";
+  case Sustain: return "sustain";
+  case Release: return "release";
+  case Done:    return "done";
+  }
+  return "-Invalid-";
+}

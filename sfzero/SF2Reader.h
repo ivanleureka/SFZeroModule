@@ -27,8 +27,9 @@ public:
   void read();
 
   /** Read sample data from the SF2 file.
-      @return Caller takes ownership of the returned buffer (use unique_ptr to manage). */
-  juce::AudioSampleBuffer *readSamples(double *progressVar = nullptr, juce::Thread *thread = nullptr);
+      @return Shared ownership of the returned buffer; every Sample created from
+              this read shares the same buffer until the last Sample releases it. */
+  std::shared_ptr<juce::AudioSampleBuffer> readSamples(double *progressVar = nullptr, juce::Thread *thread = nullptr);
 
 private:
   SF2Sound *sound_;                                ///< Borrowed pointer (not owned)

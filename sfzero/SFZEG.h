@@ -22,17 +22,21 @@ public:
   void nextSegment();
   void noteOff();
   void fastRelease();
-  bool isDone() { return (segment_ == Done); }
-  bool isReleasing() { return (segment_ == Release); }
-  int segmentIndex() { return static_cast<int>(segment_); }
-  float getLevel() const { return level_; }
-  void setLevel(float v) { level_ = v; }
-  float getSlope() const { return slope_; }
-  void setSlope(float v) { slope_ = v; }
-  int getSamplesUntilNextSegment() const { return samplesUntilNextSegment_; }
-  void setSamplesUntilNextSegment(int v) { samplesUntilNextSegment_ = v; }
-  bool getSegmentIsExponential() const { return segmentIsExponential_; }
-  void setSegmentIsExponential(bool v) { segmentIsExponential_ = v; }
+  bool isDone() const noexcept { return (segment_ == Done); }
+  bool isReleasing() const noexcept { return (segment_ == Release); }
+  int segmentIndex() const noexcept { return static_cast<int>(segment_); }
+  float getLevel() const noexcept { return level_; }
+  void setLevel(float v) noexcept { level_ = v; }
+  float getSlope() const noexcept { return slope_; }
+  void setSlope(float v) noexcept { slope_ = v; }
+  int getSamplesUntilNextSegment() const noexcept { return samplesUntilNextSegment_; }
+  void setSamplesUntilNextSegment(int v) noexcept { samplesUntilNextSegment_ = v; }
+  bool getSegmentIsExponential() const noexcept { return segmentIsExponential_; }
+  void setSegmentIsExponential(bool v) noexcept { segmentIsExponential_ = v; }
+
+  /** Returns a stable, lowercase string for the current envelope segment.
+      Used by infoString() for debug rendering. */
+  const char *segmentName() const noexcept;
 
 private:
   enum Segment

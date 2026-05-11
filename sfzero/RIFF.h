@@ -30,7 +30,7 @@ struct RIFFChunk
   void seek(juce::InputStream *file);
   void seekAfter(juce::InputStream *file);
 
-  juce::int64 end() { return (start + size); }
+  juce::int64 end() const noexcept { return (start + size); }
   juce::String readString(juce::InputStream *file);
 };
 }

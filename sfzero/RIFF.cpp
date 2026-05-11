@@ -46,6 +46,17 @@ void sfzero::RIFFChunk::seekAfter(juce::InputStream *file)
 
 juce::String sfzero::RIFFChunk::readString(juce::InputStream *file)
 {
+  // Bound the read so a malformed chunk header can't cause a multi-GB
+  // allocation. SF2 metadata strings (INAM, IPRD, etc.) are bounded by
+  // the spec to 256 bytes; 1 MB is two orders of magnitude over.
+  constexpr sfzero::dword kMaxChunkStringSize = 1u * 1024u * 1024u;
+  if (size > kMaxChunkStringSize)
+  {
+    DBG("RIFFChunk::readString: chunk size " << static_cast<juce::int64>(size)
+        << " exceeds cap " << static_cast<juce::int64>(kMaxChunkStringSize) << "; truncating to empty string");
+    return {};
+  }
+
   juce::MemoryBlock memoryBlock(size);
   file->read(memoryBlock.getData(), static_cast<int>(memoryBlock.getSize()));
   return memoryBlock.toString();

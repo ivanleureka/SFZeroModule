@@ -24,29 +24,12 @@ sfzero::SF2Sound::SF2Sound(const void* data, size_t dataSize)
 
 sfzero::SF2Sound::~SF2Sound()
 {
-  // "presets" owns the regions, so clear them out of "regions" so ~SFZSound()
-  // doesn't try to delete them.
+  // regions_ is a borrowed view; ownership of these Regions lives in Preset::regions.
+  // Clear the view explicitly so SFZSound's destructor sees an empty Array.
   getRegions().clear();
-
-  // The samples all share a single buffer, so make sure they don't all delete
-  // it.
-  juce::AudioSampleBuffer *buffer = nullptr;
-  
-  // First detach buffer from all samples
-  for (juce::HashMap<int, sfzero::Sample *>::Iterator i(samplesByRate_); i.next();)
-  {
-    buffer = i.getValue()->detachBuffer();
-  }
-  
-  // Delete the shared buffer
-  delete buffer;
-  
-  // Now delete all the samples
-  for (juce::HashMap<int, sfzero::Sample *>::Iterator i(samplesByRate_); i.next();)
-  {
-    delete i.getValue();
-  }
-  samplesByRate_.clear();
+  // Sample objects are owned by samplesStorage_ (auto-deleted after this body).
+  // The shared AudioSampleBuffer is held by std::shared_ptr inside each Sample,
+  // so it disappears once the last Sample is destroyed — no manual delete needed.
 }
 
 class PresetComparator
@@ -93,7 +76,7 @@ void sfzero::SF2Sound::loadRegions()
 
 void sfzero::SF2Sound::loadSamples(juce::AudioFormatManager * /*formatManager*/, double *progressVar, juce::Thread *thread)
 {
-  juce::AudioSampleBuffer *buffer = nullptr;
+  std::shared_ptr<juce::AudioSampleBuffer> buffer;
 
   // Create reader either from memory or file
   if (memoryStream_)
@@ -128,7 +111,7 @@ void sfzero::SF2Sound::loadSamples(juce::AudioFormatManager * /*formatManager*/,
   }
 }
 
-void sfzero::SF2Sound::addPreset(sfzero::SF2Sound::Preset *preset) { presets_.add(preset); }
+void sfzero::SF2Sound::addPreset(std::unique_ptr<sfzero::SF2Sound::Preset> preset) { presets_.add(preset.release()); }
 
 int sfzero::SF2Sound::numSubsounds() { return presets_.size(); }
 
@@ -163,13 +146,13 @@ sfzero::Sample *sfzero::SF2Sound::sampleFor(double sampleRate)
 
   if (sample == nullptr)
   {
-    sample = new sfzero::Sample(sampleRate);
+    sample = samplesStorage_.add(std::make_unique<sfzero::Sample>(sampleRate));
     samplesByRate_.set(static_cast<int>(sampleRate), sample);
   }
   return sample;
 }
 
-void sfzero::SF2Sound::setSamplesBuffer(juce::AudioSampleBuffer *buffer)
+void sfzero::SF2Sound::setSamplesBuffer(std::shared_ptr<juce::AudioSampleBuffer> buffer)
 {
   for (juce::HashMap<int, sfzero::Sample *>::Iterator i(samplesByRate_); i.next();)
   {

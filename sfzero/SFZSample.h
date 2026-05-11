@@ -22,21 +22,21 @@ public:
 
   bool load(juce::AudioFormatManager *formatManager);
 
-  juce::File getFile() { return (file_); }
-  juce::AudioSampleBuffer *getBuffer() { return buffer_.get(); }
-  double getSampleRate() { return (sampleRate_); }
+  juce::File getFile() const noexcept { return (file_); }
+  juce::AudioSampleBuffer *getBuffer() const noexcept { return buffer_.get(); }
+  std::shared_ptr<juce::AudioSampleBuffer> getBufferShared() const noexcept { return buffer_; }
+  double getSampleRate() const noexcept { return sampleRate_; }
   juce::String getShortName();
 
-  /** Takes ownership of the buffer. */
-  void setBuffer(juce::AudioSampleBuffer *newBuffer);
-
-  /** Releases ownership of the buffer to the caller. */
-  juce::AudioSampleBuffer *detachBuffer();
+  /** Shares ownership of the buffer with the caller. Multiple Samples may share
+      the same underlying AudioSampleBuffer (e.g., the SF2 case where one buffer
+      backs every Sample). */
+  void setBuffer(std::shared_ptr<juce::AudioSampleBuffer> newBuffer);
 
   juce::String dump();
-  juce::uint64 getSampleLength() const { return sampleLength_; }
-  juce::uint64 getLoopStart() const { return loopStart_; }
-  juce::uint64 getLoopEnd() const { return loopEnd_; }
+  juce::uint64 getSampleLength() const noexcept { return sampleLength_; }
+  juce::uint64 getLoopStart() const noexcept { return loopStart_; }
+  juce::uint64 getLoopEnd() const noexcept { return loopEnd_; }
 
 #ifdef JUCE_DEBUG
   void checkIfZeroed(const char *where);
@@ -44,7 +44,7 @@ public:
 
 private:
   juce::File file_;
-  std::unique_ptr<juce::AudioSampleBuffer> buffer_;  ///< Owned sample data
+  std::shared_ptr<juce::AudioSampleBuffer> buffer_;  ///< Shared buffer; refcount drops to zero when last Sample releases it.
   double sampleRate_;
   juce::uint64 sampleLength_, loopStart_, loopEnd_;
 

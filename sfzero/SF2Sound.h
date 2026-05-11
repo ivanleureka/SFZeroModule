@@ -5,16 +5,17 @@
  * For license info please see the LICENSE file distributed with this source code
  *
  * OWNERSHIP MODEL:
- * - presets_: OwnedArray of Preset objects (auto-deleted)
- * - samplesByRate_: HashMap of owned Sample pointers (manually deleted in destructor)
- * - All Samples share ONE AudioSampleBuffer (complex shared ownership)
- * - Destructor detaches shared buffer before deleting to avoid double-free
- * - Do NOT delete Sample objects externally; let SF2Sound manage them
+ * - presets_: OwnedArray of Preset objects (auto-deleted; each Preset owns its regions).
+ * - samplesStorage_: OwnedArray of Sample objects (sole owner).
+ * - samplesByRate_: HashMap of borrowed Sample* keyed by sample-rate (lookup only; do not delete via map).
+ * - All Samples share a single AudioSampleBuffer; ownership is documented in SFZSample.h.
+ * - Do NOT delete Sample or Region objects externally; the OwnedArrays manage lifetime.
  *************************************************************************************/
 #ifndef SF2SOUND_H_INCLUDED
 #define SF2SOUND_H_INCLUDED
 
 #include "SFZSound.h"
+#include <memory>
 
 namespace sfzero
 {
@@ -38,9 +39,9 @@ public:
 
     Preset(juce::String nameIn, int bankIn, int presetIn) : name(nameIn), bank(bankIn), preset(presetIn) {}
     ~Preset() {}
-    void addRegion(Region *region) { regions.add(region); }
+    void addRegion(std::unique_ptr<Region> region) { regions.add(region.release()); }
   };
-  void addPreset(Preset *preset);
+  void addPreset(std::unique_ptr<Preset> preset);
 
   int numSubsounds() override;
   juce::String subsoundName(int whichSubsound) override;
@@ -48,16 +49,17 @@ public:
   int selectedSubsound() override;
 
   Sample *sampleFor(double sampleRate);
-  void setSamplesBuffer(juce::AudioSampleBuffer *buffer);
+  void setSamplesBuffer(std::shared_ptr<juce::AudioSampleBuffer> buffer);
 
   // Access to presets for instancing (SF2SoundInstance)
-  int getNumPresets() const { return presets_.size(); }
-  Preset* getPreset(int index) { return presets_[index]; }
-  const Preset* getPreset(int index) const { return presets_[index]; }
+  int getNumPresets() const noexcept { return presets_.size(); }
+  Preset* getPreset(int index) noexcept { return presets_[index]; }
+  const Preset* getPreset(int index) const noexcept { return presets_[index]; }
 
 private:
   juce::OwnedArray<Preset> presets_;
-  juce::HashMap<int, Sample *> samplesByRate_;
+  juce::OwnedArray<Sample> samplesStorage_;     ///< Sole owner of Sample objects.
+  juce::HashMap<int, Sample *> samplesByRate_;  ///< Borrowed lookup keyed by sample-rate.
   int selectedPreset_;
 
   // For memory-based loading (e.g., from BinaryData)

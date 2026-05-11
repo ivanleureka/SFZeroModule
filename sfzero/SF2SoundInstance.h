@@ -41,12 +41,12 @@ public:
   int numSubsounds() const;
   juce::String subsoundName(int whichSubsound) const;
   void useSubsound(int whichSubsound);
-  int selectedSubsound() const { return selectedPreset_; }
+  int selectedSubsound() const noexcept { return selectedPreset_; }
 
   // Region access for voices (borrowed pointers - do not delete)
   Region* getRegionFor(int note, int velocity, Region::Trigger trigger = Region::attack);
-  int getNumRegions() const { return regions_.size(); }
-  Region* regionAt(int index) { return regions_[index]; }
+  int getNumRegions() const noexcept { return regions_.size(); }
+  Region* regionAt(int index) noexcept { return regions_[index]; }
 
   // Parent access (for sample data - borrowed pointer)
   SF2Sound* getParent() { return parent_; }

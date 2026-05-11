@@ -10,13 +10,19 @@
 #include "SFZSound.h"
 #include "SF2SoundInstance.h"
 #include "SFZVoice.h"
+#include <cmath>
 #include <math.h>
 
 static const float globalGain = -1.0;
 
 sfzero::Voice::Voice()
     : region_(nullptr), trigger_(0), curMidiNote_(0), curPitchWheel_(0), pitchRatio_(0), noteGainLeft_(0), noteGainRight_(0),
-      sourceSamplePosition_(0), sampleEnd_(0), loopStart_(0), loopEnd_(0), numLoops_(0), curVelocity_(0)
+      sourceSamplePosition_(0), sampleEnd_(0), loopStart_(0), loopEnd_(0),
+      bufferKeepAlive_(), inL_(nullptr), inR_(nullptr), bufferNumSamples_(0),
+      currentCutoffHz_(20000.0f), currentQ_(0.7071068f), bypassFilter_(true),
+      modegInUse_(false), modegFilterActive_(false), modegPitchActive_(false),
+      vibInUse_(false), vibPhase_(0.0f), vibPhaseInc_(0.0f), vibDelaySamples_(0),
+      numLoops_(0), curVelocity_(0)
 {
   ampeg_.setExponentialDecay(true);
 }
@@ -68,6 +74,14 @@ void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::Syn
     return;
   }
 
+  // Hold a shared_ptr to the buffer for the note's lifetime so an in-flight
+  // tail-off survives an SF2Sound swap (e.g. unloadSoundFont while voices play).
+  bufferKeepAlive_ = region_->sample->getBufferShared();
+  inL_ = bufferKeepAlive_->getReadPointer(0, 0);
+  inR_ = bufferKeepAlive_->getNumChannels() > 1 ? bufferKeepAlive_->getReadPointer(1, 0) : nullptr;
+  bufferNumSamples_ = bufferKeepAlive_->getNumSamples();
+  jassert(region_->offset >= 0 && static_cast<int>(region_->offset) < bufferNumSamples_);
+
   // Pitch.
   curMidiNote_ = midiNoteNumber;
   curPitchWheel_ = currentPitchWheelPosition;
@@ -85,6 +99,58 @@ void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::Syn
   // Region pan from SF2/SFZ is intentionally ignored - pan is sourced from MIDI
   // CC10 at the channel-mix stage in SFZeroAudioProcessor::processBlock.
   ampeg_.startNote(&region_->ampeg, floatVelocity, getSampleRate(), &region_->ampeg_veltrack);
+
+  // Phase C - mod envelope (drives filter cutoff and/or pitch).
+  modegPitchActive_ = (region_->modEnvToPitch != 0.0f);
+  modegFilterActive_ = (region_->modEnvToFilterFc != 0.0f);
+  modegInUse_ = modegPitchActive_ || modegFilterActive_;
+  if (modegInUse_)
+  {
+    modeg_.startNote(&region_->modeg, floatVelocity, getSampleRate());
+  }
+
+  // Phase C - vibrato LFO (sine, with delayed onset). The LFO is silent until
+  // vibDelaySamples_ counts down to zero; the phase advances regardless so the
+  // sine waveform doesn't snap to zero phase when delay ends.
+  vibInUse_ = (region_->vibLfoToPitch != 0.0f);
+  if (vibInUse_)
+  {
+    const double sr = getSampleRate();
+    const float vibFreqHz = sfzero::Region::absoluteCentsToHz(region_->freqVibLFO);
+    const float twoPi = 2.0f * juce::MathConstants<float>::pi;
+    vibPhase_ = 0.0f;
+    vibPhaseInc_ = twoPi * vibFreqHz / static_cast<float>(sr);
+    const float delaySecs = sfzero::Region::timecents2Secs(static_cast<int>(region_->delayVibLFO));
+    vibDelaySamples_ = static_cast<int>(delaySecs * sr);
+    if (vibDelaySamples_ < 0) vibDelaySamples_ = 0;
+  }
+
+  // Phase C - initial filter LPF. Skip the filter entirely when the region's
+  // cutoff is at/above the SF2 "no filter" default and no mod-env contribution
+  // is configured; this keeps the cost off unfiltered GM patches.
+  bypassFilter_ = (region_->initialFilterFc >= 13500.0f) && !modegFilterActive_;
+  if (!bypassFilter_)
+  {
+    const double sr = getSampleRate();
+    float cutoffHz = sfzero::Region::absoluteCentsToHz(region_->initialFilterFc);
+    // Clamp to [30 Hz, 0.45 * sampleRate] to keep the biquad well-behaved near
+    // Nyquist and at sub-audible cutoffs.
+    const float maxHz = static_cast<float>(0.45 * sr);
+    if (cutoffHz < 30.0f) cutoffHz = 30.0f;
+    if (cutoffHz > maxHz) cutoffHz = maxHz;
+    // SF2 initialFilterQ is centibels of resonance gain. Convert to a usable Q
+    // value with a 0.7071 baseline; clamp to a sane range.
+    float qLinear = 0.7071068f * sfzero::Region::centibelsToLinear(region_->initialFilterQ);
+    if (qLinear < 0.5f) qLinear = 0.5f;
+    if (qLinear > 8.0f) qLinear = 8.0f;
+    currentCutoffHz_ = cutoffHz;
+    currentQ_ = qLinear;
+    auto coeffs = juce::IIRCoefficients::makeLowPass(sr, cutoffHz, qLinear);
+    filterL_.setCoefficients(coeffs);
+    filterR_.setCoefficients(coeffs);
+    filterL_.reset();
+    filterR_.reset();
+  }
 
   // Offset/end.
   sourceSamplePosition_ = static_cast<double>(region_->offset);
@@ -135,6 +201,10 @@ void sfzero::Voice::stopNote(float /*velocity*/, bool allowTailOff)
   if (region_->loop_mode != sfzero::Region::one_shot)
   {
     ampeg_.noteOff();
+    if (modegInUse_)
+    {
+      modeg_.noteOff();
+    }
   }
   if (region_->loop_mode == sfzero::Region::loop_sustain)
   {
@@ -148,14 +218,29 @@ void sfzero::Voice::stopNoteForGroup()
   if (region_->off_mode == sfzero::Region::fast)
   {
     ampeg_.fastRelease();
+    if (modegInUse_)
+    {
+      modeg_.fastRelease();
+    }
   }
   else
   {
     ampeg_.noteOff();
+    if (modegInUse_)
+    {
+      modeg_.noteOff();
+    }
   }
 }
 
-void sfzero::Voice::stopNoteQuick() { ampeg_.fastRelease(); }
+void sfzero::Voice::stopNoteQuick()
+{
+  ampeg_.fastRelease();
+  if (modegInUse_)
+  {
+    modeg_.fastRelease();
+  }
+}
 void sfzero::Voice::pitchWheelMoved(int newValue)
 {
   if (region_ == nullptr)
@@ -175,14 +260,13 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
     return;
   }
 
-  juce::AudioSampleBuffer *buffer = region_->sample->getBuffer();
-  const float *inL = buffer->getReadPointer(0, 0);
-  const float *inR = buffer->getNumChannels() > 1 ? buffer->getReadPointer(1, 0) : nullptr;
+  // Cached at startNote() — render path does not re-dereference region_->sample.
+  const float *inL = inL_;
+  const float *inR = inR_;
+  int bufferNumSamples = bufferNumSamples_;
 
   float *outL = outputBuffer.getWritePointer(0, startSample);
   float *outR = outputBuffer.getNumChannels() > 1 ? outputBuffer.getWritePointer(1, startSample) : nullptr;
-
-  int bufferNumSamples = buffer->getNumSamples(); // leoo
 
   // Cache some values, to give them at least some chance of ending up in
   // registers.
@@ -195,10 +279,40 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
   float loopEnd = static_cast<float>(this->loopEnd_);
   float sampleEnd = static_cast<float>(this->sampleEnd_);
 
+  // Phase C - mod-env / vibrato state cached the same way ampeg is.
+  // effectivePitchRatio is the pitch ratio after envelope/LFO modulation; we
+  // update it at control rate (every kModUpdateRate samples) to keep filter
+  // coefficient recomputes and pow()/sin() calls off the audio rate. The mod-
+  // env level and the LFO phase still advance per sample so the modulation
+  // sources have the right rate; only the *application* is throttled.
+  const double sampleRate = getSampleRate();
+  const float modEnvToPitch = region_->modEnvToPitch;
+  const float modEnvToFilterFc = region_->modEnvToFilterFc;
+  const float initialFilterFc = region_->initialFilterFc;
+  const float vibLfoToPitch = region_->vibLfoToPitch;
+  const float twoPi = 2.0f * juce::MathConstants<float>::pi;
+  const bool pitchModActive = modegPitchActive_ || vibInUse_;
+  const bool needsControlRateUpdate = pitchModActive || modegFilterActive_;
+  double effectivePitchRatio = pitchRatio_;
+  float modegLevel = 0.0f, modegSlope = 0.0f;
+  int samplesUntilNextModSegment = 0;
+  bool modSegmentIsExponential = false;
+  if (modegInUse_)
+  {
+    modegLevel = modeg_.getLevel();
+    modegSlope = modeg_.getSlope();
+    samplesUntilNextModSegment = modeg_.getSamplesUntilNextSegment();
+    modSegmentIsExponential = modeg_.getSegmentIsExponential();
+  }
+  float vibPhase = vibPhase_;
+  float vibPhaseInc = vibPhaseInc_;
+  int vibDelaySamples = vibDelaySamples_;
+  static const int kModUpdateRate = 32;
+  int modUpdateCounter = 0;
+
   while (--numSamples >= 0)
   {
     int pos = static_cast<int>(sourceSamplePosition);
-    jassert(pos >= 0 && pos < bufferNumSamples); // leoo
     float alpha = static_cast<float>(sourceSamplePosition - pos);
     float invAlpha = 1.0f - alpha;
     int nextPos = pos + 1;
@@ -217,6 +331,22 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
     // float l = (inL[pos] * invAlpha + inL[nextPos] * alpha);
     // float r = inR ? (inR[pos] * invAlpha + inR[nextPos] * alpha) : l;
 
+    // Phase C - LPF (only when not bypassed). Applied before the volume gain
+    // so the envelope still shapes the filtered signal. For mono sources r is
+    // aliased to l above, so filter once and mirror to keep them coherent.
+    if (!bypassFilter_)
+    {
+      l = filterL_.processSingleSampleRaw(l);
+      if (inR)
+      {
+        r = filterR_.processSingleSampleRaw(r);
+      }
+      else
+      {
+        r = l;
+      }
+    }
+
     float gainLeft = noteGainLeft_ * ampegGain;
     float gainRight = noteGainRight_ * ampegGain;
     l *= gainLeft;
@@ -234,7 +364,7 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
     }
 
     // Next sample.
-    sourceSamplePosition += pitchRatio_;
+    sourceSamplePosition += effectivePitchRatio;
     if ((loopStart < loopEnd) && (sourceSamplePosition > loopEnd))
     {
       sourceSamplePosition = loopStart;
@@ -260,6 +390,74 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
       ampSegmentIsExponential = ampeg_.getSegmentIsExponential();
     }
 
+    // Phase C - mod-env / vibrato update + control-rate modulation. Sample-rate
+    // updates (level, phase) are cheap (one mul/add); the expensive bits (pow
+    // for pitch, sin for LFO output, biquad coefficient recompute) are
+    // throttled to every kModUpdateRate samples.
+    if (modegInUse_)
+    {
+      if (modSegmentIsExponential)
+      {
+        modegLevel *= modegSlope;
+      }
+      else
+      {
+        modegLevel += modegSlope;
+      }
+      if (--samplesUntilNextModSegment < 0)
+      {
+        modeg_.setLevel(modegLevel);
+        modeg_.nextSegment();
+        modegLevel = modeg_.getLevel();
+        modegSlope = modeg_.getSlope();
+        samplesUntilNextModSegment = modeg_.getSamplesUntilNextSegment();
+        modSegmentIsExponential = modeg_.getSegmentIsExponential();
+      }
+    }
+
+    if (vibInUse_)
+    {
+      vibPhase += vibPhaseInc;
+      if (vibPhase > twoPi) vibPhase -= twoPi;
+      if (vibDelaySamples > 0) --vibDelaySamples;
+    }
+
+    if (needsControlRateUpdate && --modUpdateCounter < 0)
+    {
+      modUpdateCounter = kModUpdateRate;
+
+      if (pitchModActive)
+      {
+        float pitchModCents = 0.0f;
+        if (modegPitchActive_)
+        {
+          pitchModCents += modegLevel * modEnvToPitch;
+        }
+        if (vibInUse_ && vibDelaySamples == 0)
+        {
+          pitchModCents += std::sin(vibPhase) * vibLfoToPitch;
+        }
+        effectivePitchRatio = pitchRatio_ * pow(2.0, pitchModCents / 1200.0);
+      }
+      if (modegFilterActive_)
+      {
+        float fcCents = initialFilterFc + modegLevel * modEnvToFilterFc;
+        if (fcCents < 1500.0f) fcCents = 1500.0f;
+        if (fcCents > 13500.0f) fcCents = 13500.0f;
+        float fcHz = sfzero::Region::absoluteCentsToHz(fcCents);
+        const float maxHz = static_cast<float>(0.45 * sampleRate);
+        if (fcHz < 30.0f) fcHz = 30.0f;
+        if (fcHz > maxHz) fcHz = maxHz;
+        if (fcHz != currentCutoffHz_)
+        {
+          currentCutoffHz_ = fcHz;
+          auto coeffs = juce::IIRCoefficients::makeLowPass(sampleRate, fcHz, currentQ_);
+          filterL_.setCoefficients(coeffs);
+          filterR_.setCoefficients(coeffs);
+        }
+      }
+    }
+
     if ((sourceSamplePosition >= sampleEnd) || ampeg_.isDone())
     {
       killNote();
@@ -270,34 +468,33 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
   this->sourceSamplePosition_ = sourceSamplePosition;
   ampeg_.setLevel(ampegGain);
   ampeg_.setSamplesUntilNextSegment(samplesUntilNextAmpSegment);
+  if (modegInUse_)
+  {
+    modeg_.setLevel(modegLevel);
+    modeg_.setSamplesUntilNextSegment(samplesUntilNextModSegment);
+  }
+  if (vibInUse_)
+  {
+    vibPhase_ = vibPhase;
+    vibDelaySamples_ = vibDelaySamples;
+  }
 }
 
-bool sfzero::Voice::isPlayingNoteDown() { return region_ && region_->trigger != sfzero::Region::release; }
+bool sfzero::Voice::isPlayingNoteDown() const noexcept { return region_ && region_->trigger != sfzero::Region::release; }
 
-bool sfzero::Voice::isPlayingOneShot() { return region_ && region_->loop_mode == sfzero::Region::one_shot; }
+bool sfzero::Voice::isPlayingOneShot() const noexcept { return region_ && region_->loop_mode == sfzero::Region::one_shot; }
 
-int sfzero::Voice::getGroup() { return region_ ? region_->group : 0; }
+int sfzero::Voice::getGroup() const noexcept { return region_ ? region_->group : 0; }
 
-juce::uint64 sfzero::Voice::getOffBy() { return region_ ? region_->off_by : 0; }
+juce::uint64 sfzero::Voice::getOffBy() const noexcept { return region_ ? region_->off_by : 0; }
 
 void sfzero::Voice::setRegion(sfzero::Region *nextRegion) { region_ = nextRegion; }
 
 juce::String sfzero::Voice::infoString()
 {
-  const char *egSegmentNames[] = {"delay", "attack", "hold", "decay", "sustain", "release", "done"};
-
-  const static int numEGSegments(sizeof(egSegmentNames) / sizeof(egSegmentNames[0]));
-
-  const char *egSegmentName = "-Invalid-";
-  int egSegmentIndex = ampeg_.segmentIndex();
-  if ((egSegmentIndex >= 0) && (egSegmentIndex < numEGSegments))
-  {
-    egSegmentName = egSegmentNames[egSegmentIndex];
-  }
-
   juce::String info;
-  info << "note: " << curMidiNote_ << ", vel: " << curVelocity_ << ", pan: " << region_->pan << ", eg: " << egSegmentName
-       << ", loops: " << numLoops_;
+  info << "note: " << curMidiNote_ << ", vel: " << curVelocity_ << ", pan: " << region_->pan
+       << ", eg: " << ampeg_.segmentName() << ", loops: " << numLoops_;
   return info;
 }
 
@@ -329,6 +526,10 @@ void sfzero::Voice::calcPitchRatio()
 void sfzero::Voice::killNote()
 {
   region_ = nullptr;
+  bufferKeepAlive_.reset();
+  inL_ = nullptr;
+  inR_ = nullptr;
+  bufferNumSamples_ = 0;
   clearCurrentNote();
 }
 

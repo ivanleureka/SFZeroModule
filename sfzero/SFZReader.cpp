@@ -38,6 +38,13 @@ void sfzero::Reader::read(const char *text, unsigned int length)
   bool inControl = false;
   juce::String defaultPath;
 
+  auto finishPendingRegion = [&]() {
+    if (buildingRegion && (buildingRegion == &curRegion))
+    {
+      finishRegion(&curRegion);
+    }
+  };
+
   while (p < end)
   {
     // We're at the start of a line; skip any whitespace.
@@ -94,7 +101,8 @@ void sfzero::Reader::read(const char *text, unsigned int length)
           if ((c == '\n') || (c == '\r'))
           {
             error("Unterminated tag");
-            goto fatalError;
+            finishPendingRegion();
+            return;
           }
           else if (c == '>')
           {
@@ -104,7 +112,8 @@ void sfzero::Reader::read(const char *text, unsigned int length)
         if (p >= end)
         {
           error("Unterminated tag");
-          goto fatalError;
+          finishPendingRegion();
+          return;
         }
         sfzero::StringSlice tag(tagStart, p - 1);
         if (tag == "region")
@@ -159,6 +168,8 @@ void sfzero::Reader::read(const char *text, unsigned int length)
       // Parameter.
       else
       {
+        bool malformed = false;
+
         // Get the parameter name.
         const char *parameterStart = p;
         while (p < end)
@@ -172,14 +183,54 @@ void sfzero::Reader::read(const char *text, unsigned int length)
         if ((p >= end) || (c != '='))
         {
           error("Malformed parameter");
-          goto nextElement;
+          malformed = true;
         }
-        sfzero::StringSlice opcode(parameterStart, p - 1);
-        if (inControl)
+
+        if (!malformed)
         {
-          if (opcode == "default_path")
+          sfzero::StringSlice opcode(parameterStart, p - 1);
+          if (inControl)
           {
-            p = readPathInto(&defaultPath, p, end);
+            if (opcode == "default_path")
+            {
+              p = readPathInto(&defaultPath, p, end);
+            }
+            else
+            {
+              const char *valueStart = p;
+              while (p < end)
+              {
+                c = *p;
+                if ((c == ' ') || (c == '\t') || (c == '\n') || (c == '\r'))
+                {
+                  break;
+                }
+                p++;
+              }
+              juce::String value(valueStart, p - valueStart);
+              juce::String fauxOpcode = juce::String(opcode.getStart(), opcode.length()) + " (in <control>)";
+              sound_->addUnsupportedOpcode(fauxOpcode);
+            }
+          }
+          else if (opcode == "sample")
+          {
+            juce::String path;
+            p = readPathInto(&path, p, end);
+            if (!path.isEmpty())
+            {
+              if (buildingRegion)
+              {
+                buildingRegion->sample = sound_->addSample(path, defaultPath);
+              }
+              else
+              {
+                error("Adding sample outside a group or region");
+              }
+            }
+            else
+            {
+              error("Empty sample path");
+            }
           }
           else
           {
@@ -194,217 +245,180 @@ void sfzero::Reader::read(const char *text, unsigned int length)
               p++;
             }
             juce::String value(valueStart, p - valueStart);
-            juce::String fauxOpcode = juce::String(opcode.getStart(), opcode.length()) + " (in <control>)";
-            sound_->addUnsupportedOpcode(fauxOpcode);
-          }
-        }
-        else if (opcode == "sample")
-        {
-          juce::String path;
-          p = readPathInto(&path, p, end);
-          if (!path.isEmpty())
-          {
-            if (buildingRegion)
+            if (buildingRegion == nullptr)
             {
-              buildingRegion->sample = sound_->addSample(path, defaultPath);
+              error("Setting a parameter outside a region or group");
+            }
+            else if (opcode == "lokey")
+            {
+              buildingRegion->lokey = keyValue(value);
+            }
+            else if (opcode == "hikey")
+            {
+              buildingRegion->hikey = keyValue(value);
+            }
+            else if (opcode == "key")
+            {
+              buildingRegion->hikey = buildingRegion->lokey = buildingRegion->pitch_keycenter = keyValue(value);
+            }
+            else if (opcode == "lovel")
+            {
+              buildingRegion->lovel = value.getIntValue();
+            }
+            else if (opcode == "hivel")
+            {
+              buildingRegion->hivel = value.getIntValue();
+            }
+            else if (opcode == "trigger")
+            {
+              buildingRegion->trigger = static_cast<sfzero::Region::Trigger>(triggerValue(value));
+            }
+            else if (opcode == "group")
+            {
+              buildingRegion->group = static_cast<int>(value.getLargeIntValue());
+            }
+            else if (opcode == "off_by")
+            {
+              buildingRegion->off_by = value.getLargeIntValue();
+            }
+            else if (opcode == "offset")
+            {
+              buildingRegion->offset = value.getLargeIntValue();
+            }
+            else if (opcode == "end")
+            {
+              juce::int64 end2 = value.getLargeIntValue();
+              if (end2 < 0)
+              {
+                buildingRegion->negative_end = true;
+              }
+              else
+              {
+                buildingRegion->end = end2;
+              }
+            }
+            else if (opcode == "loop_mode")
+            {
+              bool modeIsSupported = value == "no_loop" || value == "one_shot" || value == "loop_continuous";
+              if (modeIsSupported)
+              {
+                buildingRegion->loop_mode = static_cast<sfzero::Region::LoopMode>(loopModeValue(value));
+              }
+              else
+              {
+                juce::String fauxOpcode = juce::String(opcode.getStart(), opcode.length()) + "=" + value;
+                sound_->addUnsupportedOpcode(fauxOpcode);
+              }
+            }
+            else if (opcode == "loop_start")
+            {
+              buildingRegion->loop_start = value.getLargeIntValue();
+            }
+            else if (opcode == "loop_end")
+            {
+              buildingRegion->loop_end = value.getLargeIntValue();
+            }
+            else if (opcode == "transpose")
+            {
+              buildingRegion->transpose = value.getIntValue();
+            }
+            else if (opcode == "tune")
+            {
+              buildingRegion->tune = value.getIntValue();
+            }
+            else if (opcode == "pitch_keycenter")
+            {
+              buildingRegion->pitch_keycenter = keyValue(value);
+            }
+            else if (opcode == "pitch_keytrack")
+            {
+              buildingRegion->pitch_keytrack = value.getIntValue();
+            }
+            else if (opcode == "bend_up")
+            {
+              buildingRegion->bend_up = value.getIntValue();
+            }
+            else if (opcode == "bend_down")
+            {
+              buildingRegion->bend_down = value.getIntValue();
+            }
+            else if (opcode == "volume")
+            {
+              buildingRegion->volume = value.getFloatValue();
+            }
+            else if (opcode == "pan")
+            {
+              buildingRegion->pan = value.getFloatValue();
+            }
+            else if (opcode == "amp_veltrack")
+            {
+              buildingRegion->amp_veltrack = value.getFloatValue();
+            }
+            else if (opcode == "ampeg_delay")
+            {
+              buildingRegion->ampeg.delay = value.getFloatValue();
+            }
+            else if (opcode == "ampeg_start")
+            {
+              buildingRegion->ampeg.start = value.getFloatValue();
+            }
+            else if (opcode == "ampeg_attack")
+            {
+              buildingRegion->ampeg.attack = value.getFloatValue();
+            }
+            else if (opcode == "ampeg_hold")
+            {
+              buildingRegion->ampeg.hold = value.getFloatValue();
+            }
+            else if (opcode == "ampeg_decay")
+            {
+              buildingRegion->ampeg.decay = value.getFloatValue();
+            }
+            else if (opcode == "ampeg_sustain")
+            {
+              buildingRegion->ampeg.sustain = value.getFloatValue();
+            }
+            else if (opcode == "ampeg_release")
+            {
+              buildingRegion->ampeg.release = value.getFloatValue();
+            }
+            else if (opcode == "ampeg_vel2delay")
+            {
+              buildingRegion->ampeg_veltrack.delay = value.getFloatValue();
+            }
+            else if (opcode == "ampeg_vel2attack")
+            {
+              buildingRegion->ampeg_veltrack.attack = value.getFloatValue();
+            }
+            else if (opcode == "ampeg_vel2hold")
+            {
+              buildingRegion->ampeg_veltrack.hold = value.getFloatValue();
+            }
+            else if (opcode == "ampeg_vel2decay")
+            {
+              buildingRegion->ampeg_veltrack.decay = value.getFloatValue();
+            }
+            else if (opcode == "ampeg_vel2sustain")
+            {
+              buildingRegion->ampeg_veltrack.sustain = value.getFloatValue();
+            }
+            else if (opcode == "ampeg_vel2release")
+            {
+              buildingRegion->ampeg_veltrack.release = value.getFloatValue();
+            }
+            else if (opcode == "default_path")
+            {
+              error("\"default_path\" outside of <control> tag");
             }
             else
             {
-              error("Adding sample outside a group or region");
+              sound_->addUnsupportedOpcode(juce::String(opcode.getStart(), opcode.length()));
             }
-          }
-          else
-          {
-            error("Empty sample path");
-          }
-        }
-        else
-        {
-          const char *valueStart = p;
-          while (p < end)
-          {
-            c = *p;
-            if ((c == ' ') || (c == '\t') || (c == '\n') || (c == '\r'))
-            {
-              break;
-            }
-            p++;
-          }
-          juce::String value(valueStart, p - valueStart);
-          if (buildingRegion == nullptr)
-          {
-            error("Setting a parameter outside a region or group");
-          }
-          else if (opcode == "lokey")
-          {
-            buildingRegion->lokey = keyValue(value);
-          }
-          else if (opcode == "hikey")
-          {
-            buildingRegion->hikey = keyValue(value);
-          }
-          else if (opcode == "key")
-          {
-            buildingRegion->hikey = buildingRegion->lokey = buildingRegion->pitch_keycenter = keyValue(value);
-          }
-          else if (opcode == "lovel")
-          {
-            buildingRegion->lovel = value.getIntValue();
-          }
-          else if (opcode == "hivel")
-          {
-            buildingRegion->hivel = value.getIntValue();
-          }
-          else if (opcode == "trigger")
-          {
-            buildingRegion->trigger = static_cast<sfzero::Region::Trigger>(triggerValue(value));
-          }
-          else if (opcode == "group")
-          {
-            buildingRegion->group = static_cast<int>(value.getLargeIntValue());
-          }
-          else if (opcode == "off_by")
-          {
-            buildingRegion->off_by = value.getLargeIntValue();
-          }
-          else if (opcode == "offset")
-          {
-            buildingRegion->offset = value.getLargeIntValue();
-          }
-          else if (opcode == "end")
-          {
-            juce::int64 end2 = value.getLargeIntValue();
-            if (end2 < 0)
-            {
-              buildingRegion->negative_end = true;
-            }
-            else
-            {
-              buildingRegion->end = end2;
-            }
-          }
-          else if (opcode == "loop_mode")
-          {
-            bool modeIsSupported = value == "no_loop" || value == "one_shot" || value == "loop_continuous";
-            if (modeIsSupported)
-            {
-              buildingRegion->loop_mode = static_cast<sfzero::Region::LoopMode>(loopModeValue(value));
-            }
-            else
-            {
-              juce::String fauxOpcode = juce::String(opcode.getStart(), opcode.length()) + "=" + value;
-              sound_->addUnsupportedOpcode(fauxOpcode);
-            }
-          }
-          else if (opcode == "loop_start")
-          {
-            buildingRegion->loop_start = value.getLargeIntValue();
-          }
-          else if (opcode == "loop_end")
-          {
-            buildingRegion->loop_end = value.getLargeIntValue();
-          }
-          else if (opcode == "transpose")
-          {
-            buildingRegion->transpose = value.getIntValue();
-          }
-          else if (opcode == "tune")
-          {
-            buildingRegion->tune = value.getIntValue();
-          }
-          else if (opcode == "pitch_keycenter")
-          {
-            buildingRegion->pitch_keycenter = keyValue(value);
-          }
-          else if (opcode == "pitch_keytrack")
-          {
-            buildingRegion->pitch_keytrack = value.getIntValue();
-          }
-          else if (opcode == "bend_up")
-          {
-            buildingRegion->bend_up = value.getIntValue();
-          }
-          else if (opcode == "bend_down")
-          {
-            buildingRegion->bend_down = value.getIntValue();
-          }
-          else if (opcode == "volume")
-          {
-            buildingRegion->volume = value.getFloatValue();
-          }
-          else if (opcode == "pan")
-          {
-            buildingRegion->pan = value.getFloatValue();
-          }
-          else if (opcode == "amp_veltrack")
-          {
-            buildingRegion->amp_veltrack = value.getFloatValue();
-          }
-          else if (opcode == "ampeg_delay")
-          {
-            buildingRegion->ampeg.delay = value.getFloatValue();
-          }
-          else if (opcode == "ampeg_start")
-          {
-            buildingRegion->ampeg.start = value.getFloatValue();
-          }
-          else if (opcode == "ampeg_attack")
-          {
-            buildingRegion->ampeg.attack = value.getFloatValue();
-          }
-          else if (opcode == "ampeg_hold")
-          {
-            buildingRegion->ampeg.hold = value.getFloatValue();
-          }
-          else if (opcode == "ampeg_decay")
-          {
-            buildingRegion->ampeg.decay = value.getFloatValue();
-          }
-          else if (opcode == "ampeg_sustain")
-          {
-            buildingRegion->ampeg.sustain = value.getFloatValue();
-          }
-          else if (opcode == "ampeg_release")
-          {
-            buildingRegion->ampeg.release = value.getFloatValue();
-          }
-          else if (opcode == "ampeg_vel2delay")
-          {
-            buildingRegion->ampeg_veltrack.delay = value.getFloatValue();
-          }
-          else if (opcode == "ampeg_vel2attack")
-          {
-            buildingRegion->ampeg_veltrack.attack = value.getFloatValue();
-          }
-          else if (opcode == "ampeg_vel2hold")
-          {
-            buildingRegion->ampeg_veltrack.hold = value.getFloatValue();
-          }
-          else if (opcode == "ampeg_vel2decay")
-          {
-            buildingRegion->ampeg_veltrack.decay = value.getFloatValue();
-          }
-          else if (opcode == "ampeg_vel2sustain")
-          {
-            buildingRegion->ampeg_veltrack.sustain = value.getFloatValue();
-          }
-          else if (opcode == "ampeg_vel2release")
-          {
-            buildingRegion->ampeg_veltrack.release = value.getFloatValue();
-          }
-          else if (opcode == "default_path")
-          {
-            error("\"default_path\" outside of <control> tag");
-          }
-          else
-          {
-            sound_->addUnsupportedOpcode(juce::String(opcode.getStart(), opcode.length()));
           }
         }
       }
 
-    // Skip to next element.
-    nextElement:
+      // Skip to next element.
       c = 0;
       while (p < end)
       {
@@ -423,11 +437,7 @@ void sfzero::Reader::read(const char *text, unsigned int length)
     }
   }
 
-fatalError:
-  if (buildingRegion && (buildingRegion == &curRegion))
-  {
-    finishRegion(buildingRegion);
-  }
+  finishPendingRegion();
 }
 
 const char *sfzero::Reader::handleLineEnd(const char *p)
@@ -580,10 +590,9 @@ int sfzero::Reader::loopModeValue(const juce::String &str)
 
 void sfzero::Reader::finishRegion(sfzero::Region *region)
 {
-  sfzero::Region *newRegion = new sfzero::Region();
-
+  auto newRegion = std::make_unique<sfzero::Region>();
   *newRegion = *region;
-  sound_->addRegion(newRegion);
+  sound_->addRegion(std::move(newRegion));
 }
 
 void sfzero::Reader::error(const juce::String &message)

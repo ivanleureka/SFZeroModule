@@ -57,8 +57,9 @@ void sfzero::SF2Reader::read()
   for (int whichPreset = 0; whichPreset < hydra.phdrNumItems - 1; ++whichPreset)
   {
     sfzero::SF2::phdr *phdr = &hydra.phdrItems[whichPreset];
-    sfzero::SF2Sound::Preset *preset = new sfzero::SF2Sound::Preset(phdr->presetName, phdr->bank, phdr->preset);
-    sound_->addPreset(preset);
+    auto presetOwner = std::make_unique<sfzero::SF2Sound::Preset>(phdr->presetName, phdr->bank, phdr->preset);
+    sfzero::SF2Sound::Preset *preset = presetOwner.get(); // Borrowed view used below; lifetime owned by SF2Sound::presets_ after addPreset.
+    sound_->addPreset(std::move(presetOwner));
 
     // Zones.
     //*** TODO: Handle global zone (modulators only).
@@ -133,10 +134,10 @@ void sfzero::SF2Reader::read()
                     sound_->addUnsupportedOpcode("extreme gain in initialAttenuation");
                   }
 
-                  sfzero::Region *newRegion = new sfzero::Region();
+                  auto newRegion = std::make_unique<sfzero::Region>();
                   *newRegion = zoneRegion;
                   newRegion->sample = sound_->sampleFor(shdr->sampleRate);
-                  preset->addRegion(newRegion);
+                  preset->addRegion(std::move(newRegion));
                   hadSampleID = true;
                 }
                 else
@@ -156,7 +157,10 @@ void sfzero::SF2Reader::read()
               int whichMod = ibag->instModNdx;
               if (whichMod < modEnd)
               {
-                sound_->addUnsupportedOpcode("any modulator");
+                sound_->addUnsupportedOpcode(
+                    (whichZone2 == firstZone)
+                        ? "instrument global zone modulator"
+                        : "instrument zone modulator");
               }
             }
           }
@@ -172,18 +176,22 @@ void sfzero::SF2Reader::read()
         }
       }
 
-      // Modulators.
+      // Modulators. The first zone of each preset is the global zone
+      // (modulators only) per SF2 spec; tag it distinctly.
       int modEnd = pbag[1].modNdx;
       int whichMod = pbag->modNdx;
       if (whichMod < modEnd)
       {
-        sound_->addUnsupportedOpcode("any modulator");
+        sound_->addUnsupportedOpcode(
+            (whichZone == phdr->presetBagNdx)
+                ? "preset global zone modulator"
+                : "preset zone modulator");
       }
     }
   }
 }
 
-juce::AudioSampleBuffer *sfzero::SF2Reader::readSamples(double *progressVar, juce::Thread *thread)
+std::shared_ptr<juce::AudioSampleBuffer> sfzero::SF2Reader::readSamples(double *progressVar, juce::Thread *thread)
 {
   static const int bufferSize = 32768;
 
@@ -227,9 +235,9 @@ juce::AudioSampleBuffer *sfzero::SF2Reader::readSamples(double *progressVar, juc
     return nullptr;
   }
 
-  // Allocate the AudioSampleBuffer (caller takes ownership)
+  // Allocate the shared sample buffer; every SFZSample built from this SF2 will share it.
   int numSamples = int (chunk.size / sizeof(short));
-  auto sampleBuffer = std::make_unique<juce::AudioSampleBuffer>(1, numSamples);
+  auto sampleBuffer = std::make_shared<juce::AudioSampleBuffer>(1, numSamples);
 
   // Read and convert using RAII buffer
   std::vector<short> buffer(bufferSize);
@@ -263,7 +271,7 @@ juce::AudioSampleBuffer *sfzero::SF2Reader::readSamples(double *progressVar, juc
     }
     if (thread && thread->threadShouldExit())
     {
-      return nullptr;  // RAII handles cleanup
+      return nullptr;  // shared_ptr drops the buffer
     }
   }
 
@@ -272,7 +280,7 @@ juce::AudioSampleBuffer *sfzero::SF2Reader::readSamples(double *progressVar, juc
     *progressVar = 1.0;
   }
 
-  return sampleBuffer.release();  // Transfer ownership to caller
+  return sampleBuffer;
 }
 
 void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, sfzero::SF2::genAmountType *amount, sfzero::Region *region)
@@ -388,13 +396,51 @@ void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, sfzero::SF2::
     // Ignore.
     break;
 
-  case sfzero::SF2Generator::modLfoToPitch:
-  case sfzero::SF2Generator::vibLfoToPitch:
-  case sfzero::SF2Generator::modEnvToPitch:
+  // Phase C - filter, mod-env, and vibrato-LFO generators. Each maps to a
+  // Region field carrying its raw SF2 amount; conversions (timecents->seconds,
+  // centibels->0-100, etc.) happen in Region::sf2ToSFZ() / at startNote time.
   case sfzero::SF2Generator::initialFilterFc:
+    region->initialFilterFc = amount->shortAmount;
+    break;
   case sfzero::SF2Generator::initialFilterQ:
-  case sfzero::SF2Generator::modLfoToFilterFc:
+    region->initialFilterQ = amount->shortAmount;
+    break;
   case sfzero::SF2Generator::modEnvToFilterFc:
+    region->modEnvToFilterFc = amount->shortAmount;
+    break;
+  case sfzero::SF2Generator::modEnvToPitch:
+    region->modEnvToPitch = amount->shortAmount;
+    break;
+  case sfzero::SF2Generator::delayModEnv:
+    region->modeg.delay = amount->shortAmount;
+    break;
+  case sfzero::SF2Generator::attackModEnv:
+    region->modeg.attack = amount->shortAmount;
+    break;
+  case sfzero::SF2Generator::holdModEnv:
+    region->modeg.hold = amount->shortAmount;
+    break;
+  case sfzero::SF2Generator::decayModEnv:
+    region->modeg.decay = amount->shortAmount;
+    break;
+  case sfzero::SF2Generator::sustainModEnv:
+    region->modeg.sustain = amount->shortAmount;
+    break;
+  case sfzero::SF2Generator::releaseModEnv:
+    region->modeg.release = amount->shortAmount;
+    break;
+  case sfzero::SF2Generator::delayVibLFO:
+    region->delayVibLFO = amount->shortAmount;
+    break;
+  case sfzero::SF2Generator::freqVibLFO:
+    region->freqVibLFO = amount->shortAmount;
+    break;
+  case sfzero::SF2Generator::vibLfoToPitch:
+    region->vibLfoToPitch = amount->shortAmount;
+    break;
+
+  case sfzero::SF2Generator::modLfoToPitch:
+  case sfzero::SF2Generator::modLfoToFilterFc:
   case sfzero::SF2Generator::modLfoToVolume:
   case sfzero::SF2Generator::unused1:
   case sfzero::SF2Generator::chorusEffectsSend:
@@ -404,14 +450,6 @@ void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, sfzero::SF2::
   case sfzero::SF2Generator::unused4:
   case sfzero::SF2Generator::delayModLFO:
   case sfzero::SF2Generator::freqModLFO:
-  case sfzero::SF2Generator::delayVibLFO:
-  case sfzero::SF2Generator::freqVibLFO:
-  case sfzero::SF2Generator::delayModEnv:
-  case sfzero::SF2Generator::attackModEnv:
-  case sfzero::SF2Generator::holdModEnv:
-  case sfzero::SF2Generator::decayModEnv:
-  case sfzero::SF2Generator::sustainModEnv:
-  case sfzero::SF2Generator::releaseModEnv:
   case sfzero::SF2Generator::keynumToModEnvHold:
   case sfzero::SF2Generator::keynumToModEnvDecay:
   case sfzero::SF2Generator::keynumToVolEnvHold:

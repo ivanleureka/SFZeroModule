@@ -10,21 +10,7 @@
 #include "SFZSample.h"
 
 sfzero::Sound::Sound(const juce::File &fileIn) : file_(fileIn) {}
-sfzero::Sound::~Sound()
-{
-  int numRegions = regions_.size();
-
-  for (int i = 0; i < numRegions; ++i)
-  {
-    delete regions_[i];
-    regions_.set(i, nullptr);
-  }
-
-  for (juce::HashMap<juce::String, sfzero::Sample *>::Iterator i(samples_); i.next();)
-  {
-    delete i.getValue();
-  }
-}
+sfzero::Sound::~Sound() = default;
 
 bool sfzero::Sound::appliesToNote(int /*midiNoteNumber*/)
 {
@@ -33,7 +19,11 @@ bool sfzero::Sound::appliesToNote(int /*midiNoteNumber*/)
 }
 
 bool sfzero::Sound::appliesToChannel(int /*midiChannel*/) { return true; }
-void sfzero::Sound::addRegion(sfzero::Region *region) { regions_.add(region); }
+void sfzero::Sound::addRegion(std::unique_ptr<sfzero::Region> region)
+{
+  regions_.add(region.get());          // Borrowed view of the just-added region.
+  sfzOwnedRegions_.add(region.release()); // OwnedArray now owns the lifetime.
+}
 sfzero::Sample *sfzero::Sound::addSample(juce::String path, juce::String defaultPath)
 {
   path = path.replaceCharacter('\\', '/');
@@ -49,16 +39,26 @@ sfzero::Sample *sfzero::Sound::addSample(juce::String path, juce::String default
     sampleFile = defaultDir.getChildFile(path);
   }
   juce::String samplePath = sampleFile.getFullPathName();
-  sfzero::Sample *sample = samples_[samplePath];
+  sfzero::Sample *sample = samplesByPath_[samplePath];
   if (sample == nullptr)
   {
-    sample = new sfzero::Sample(sampleFile);
-    samples_.set(samplePath, sample);
+    sample = samplesStorage_.add(std::make_unique<sfzero::Sample>(sampleFile));
+    samplesByPath_.set(samplePath, sample);
   }
   return sample;
 }
 
 void sfzero::Sound::addError(const juce::String &message) { errors_.add(message); }
+
+juce::StringArray sfzero::Sound::getUnsupportedOpcodes()
+{
+  juce::StringArray result;
+  for (juce::HashMap<juce::String, juce::String>::Iterator it(unsupportedOpcodes_); it.next();)
+  {
+    result.add(it.getKey());
+  }
+  return result;
+}
 
 void sfzero::Sound::addUnsupportedOpcode(const juce::String &opcode)
 {
@@ -85,8 +85,8 @@ void sfzero::Sound::loadSamples(juce::AudioFormatManager *formatManager, double 
     *progressVar = 0.0;
   }
 
-  double numSamplesLoaded = 1.0, numSamples = samples_.size();
-  for (juce::HashMap<juce::String, sfzero::Sample *>::Iterator i(samples_); i.next();)
+  double numSamplesLoaded = 1.0, numSamples = samplesByPath_.size();
+  for (juce::HashMap<juce::String, sfzero::Sample *>::Iterator i(samplesByPath_); i.next();)
   {
     sfzero::Sample *sample = i.getValue();
     bool ok = sample->load(formatManager);
@@ -127,10 +127,6 @@ sfzero::Region *sfzero::Sound::getRegionFor(int note, int velocity, sfzero::Regi
 
   return nullptr;
 }
-
-int sfzero::Sound::getNumRegions() { return regions_.size(); }
-
-sfzero::Region *sfzero::Sound::regionAt(int index) { return regions_[index]; }
 
 int sfzero::Sound::numSubsounds() { return 1; }
 
@@ -179,10 +175,10 @@ juce::String sfzero::Sound::dump()
     info << "no regions.\n";
   }
 
-  if (samples_.size() > 0)
+  if (samplesByPath_.size() > 0)
   {
-    info << samples_.size() << " samples: \n";
-    for (juce::HashMap<juce::String, sfzero::Sample *>::Iterator i(samples_); i.next();)
+    info << samplesByPath_.size() << " samples: \n";
+    for (juce::HashMap<juce::String, sfzero::Sample *>::Iterator i(samplesByPath_); i.next();)
     {
       info << i.getValue()->dump();
     }

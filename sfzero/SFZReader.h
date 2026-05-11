@@ -43,7 +43,6 @@ class StringSlice
 {
 public:
   StringSlice(const char *startIn, const char *endIn) : start_(startIn), end_(endIn) {}
-  virtual ~StringSlice() {}
 
   unsigned int length() { return static_cast<int>(end_ - start_); }
   bool operator==(const char *other) { return (strncmp(start_, other, length()) == 0); }

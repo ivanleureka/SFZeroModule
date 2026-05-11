@@ -8,6 +8,7 @@
 #define SFZVOICE_H_INCLUDED
 
 #include "SFZEG.h"
+#include <memory>
 
 namespace sfzero
 {
@@ -27,11 +28,11 @@ public:
   void pitchWheelMoved(int newValue) override;
   void controllerMoved(int controllerNumber, int newValue) override;
   void renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int startSample, int numSamples) override;
-  bool isPlayingNoteDown();
-  bool isPlayingOneShot();
+  bool isPlayingNoteDown() const noexcept;
+  bool isPlayingOneShot() const noexcept;
 
-  int getGroup();
-  juce::uint64 getOffBy();
+  int getGroup() const noexcept;
+  juce::uint64 getOffBy() const noexcept;
 
   // Set the region to be used by the next startNote().
   void setRegion(Region *nextRegion);
@@ -48,6 +49,30 @@ private:
   EG ampeg_;
   juce::int64 sampleEnd_;
   juce::int64 loopStart_, loopEnd_;
+  std::shared_ptr<juce::AudioSampleBuffer> bufferKeepAlive_;
+  const float *inL_;
+  const float *inR_;
+  int bufferNumSamples_;
+
+  // Phase C - per-voice low-pass biquad. Bypassed when the region requests no
+  // filtering (initialFilterFc near max and no mod-env contribution).
+  juce::IIRFilter filterL_, filterR_;
+  float currentCutoffHz_;
+  float currentQ_;
+  bool bypassFilter_;
+
+  // Phase C - second envelope routed to filter cutoff and pitch.
+  EG modeg_;
+  bool modegInUse_;          // any contribution at all (filter or pitch)
+  bool modegFilterActive_;   // contributes to filter cutoff specifically
+  bool modegPitchActive_;    // contributes to pitch ratio specifically
+
+  // Phase C - vibrato LFO (sine, with onset delay). Phase advances per audio
+  // sample; output is sampled at control rate inside the render loop.
+  bool vibInUse_;
+  float vibPhase_;
+  float vibPhaseInc_;
+  int vibDelaySamples_;
 
   // Info only.
   int numLoops_;

@@ -35,11 +35,13 @@ bool sfzero::SF2SoundInstance::appliesToChannel(int midiChannel)
 
 int sfzero::SF2SoundInstance::numSubsounds() const
 {
+  jassert(parent_ != nullptr);
   return parent_ ? parent_->numSubsounds() : 0;
 }
 
 juce::String sfzero::SF2SoundInstance::subsoundName(int whichSubsound) const
 {
+  jassert(parent_ != nullptr);
   return parent_ ? parent_->subsoundName(whichSubsound) : juce::String();
 }
 
@@ -76,6 +78,7 @@ void sfzero::SF2SoundInstance::useSubsound(int whichSubsound)
 
 sfzero::Region* sfzero::SF2SoundInstance::getRegionFor(int note, int velocity, Region::Trigger trigger)
 {
+  jassert(parent_ != nullptr);
   for (auto* region : regions_)
   {
     if (region->matches(note, velocity, trigger))
