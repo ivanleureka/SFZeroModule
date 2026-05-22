@@ -37,6 +37,7 @@ public:
   Sample *addSample(juce::String path, juce::String defaultPath = {});
   void addError(const juce::String &message);
   void addUnsupportedOpcode(const juce::String &opcode);
+  void addUnsupportedOpcode(const juce::String &opcode, int amount);
 
   virtual void loadRegions();
   virtual void loadSamples(juce::AudioFormatManager *formatManager, double *progressVar = nullptr,
@@ -49,6 +50,7 @@ public:
   const juce::StringArray &getErrors() const noexcept { return errors_; }
   const juce::StringArray &getWarnings() const noexcept { return warnings_; }
   juce::StringArray getUnsupportedOpcodes();
+  juce::StringArray getUnsupportedOpcodeReport();
 
   virtual int numSubsounds();
   virtual juce::String subsoundName(int whichSubsound);
@@ -68,7 +70,16 @@ private:
   juce::HashMap<juce::String, Sample *> samplesByPath_; ///< Borrowed lookup keyed by full path.
   juce::StringArray errors_;
   juce::StringArray warnings_;
-  juce::HashMap<juce::String, juce::String> unsupportedOpcodes_;
+
+  struct OpcodeStats
+  {
+    int total = 0;
+    int nonZero = 0;
+    int minAmount = 0;
+    int maxAmount = 0;
+    bool hasAmount = false;
+  };
+  juce::HashMap<juce::String, OpcodeStats> unsupportedOpcodes_;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Sound)
 };

@@ -53,18 +53,76 @@ void sfzero::Sound::addError(const juce::String &message) { errors_.add(message)
 juce::StringArray sfzero::Sound::getUnsupportedOpcodes()
 {
   juce::StringArray result;
-  for (juce::HashMap<juce::String, juce::String>::Iterator it(unsupportedOpcodes_); it.next();)
+  for (juce::HashMap<juce::String, OpcodeStats>::Iterator it(unsupportedOpcodes_); it.next();)
   {
     result.add(it.getKey());
   }
   return result;
 }
 
+juce::StringArray sfzero::Sound::getUnsupportedOpcodeReport()
+{
+  juce::StringArray result;
+  for (juce::HashMap<juce::String, OpcodeStats>::Iterator it(unsupportedOpcodes_); it.next();)
+  {
+    const auto &name = it.getKey();
+    const auto &s = it.getValue();
+    juce::String line;
+    line << name << ": ";
+    if (s.hasAmount)
+    {
+      line << s.total << " regions, " << s.nonZero << " non-zero";
+      if (s.nonZero > 0)
+      {
+        line << " (range " << s.minAmount << ".." << s.maxAmount << ")";
+      }
+    }
+    else
+    {
+      line << s.total << " occurrences";
+    }
+    result.add(line);
+  }
+  return result;
+}
+
 void sfzero::Sound::addUnsupportedOpcode(const juce::String &opcode)
 {
-  if (!unsupportedOpcodes_.contains(opcode))
+  const bool firstSeen = !unsupportedOpcodes_.contains(opcode);
+  OpcodeStats stats = firstSeen ? OpcodeStats{} : unsupportedOpcodes_[opcode];
+  stats.total += 1;
+  unsupportedOpcodes_.set(opcode, stats);
+  if (firstSeen)
   {
-    unsupportedOpcodes_.set(opcode, opcode);
+    juce::String warning = "unsupported opcode: ";
+    warning << opcode;
+    warnings_.add(warning);
+  }
+}
+
+void sfzero::Sound::addUnsupportedOpcode(const juce::String &opcode, int amount)
+{
+  const bool firstSeen = !unsupportedOpcodes_.contains(opcode);
+  OpcodeStats stats = firstSeen ? OpcodeStats{} : unsupportedOpcodes_[opcode];
+  stats.total += 1;
+  if (!stats.hasAmount)
+  {
+    stats.hasAmount = true;
+    stats.minAmount = amount;
+    stats.maxAmount = amount;
+  }
+  else
+  {
+    if (amount < stats.minAmount) stats.minAmount = amount;
+    if (amount > stats.maxAmount) stats.maxAmount = amount;
+  }
+  if (amount != 0)
+  {
+    stats.nonZero += 1;
+  }
+  unsupportedOpcodes_.set(opcode, stats);
+  if (firstSeen)
+  {
     juce::String warning = "unsupported opcode: ";
     warning << opcode;
     warnings_.add(warning);

@@ -466,7 +466,7 @@ void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, sfzero::SF2::
   case sfzero::SF2Generator::unused5:
   {
     const sfzero::SF2Generator *generator = sfzero::GeneratorFor(static_cast<int>(genOper));
-    sound_->addUnsupportedOpcode(generator->name);
+    sound_->addUnsupportedOpcode(generator->name, amount->shortAmount);
   }
   break;
   }
