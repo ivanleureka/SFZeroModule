@@ -212,7 +212,6 @@ std::shared_ptr<juce::AudioSampleBuffer> sfzero::SF2Reader::readSamples(double *
     chunk.readFrom(file_.get());
     if (FourCCEquals(chunk.id, "sdta"))
     {
-      found = true;
       break;
     }
     chunk.seekAfter(file_.get());
