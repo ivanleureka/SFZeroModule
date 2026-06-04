@@ -32,7 +32,7 @@ struct SF2Generator
   };
 };
 
-const SF2Generator *GeneratorFor(int index);
+const SF2Generator *GeneratorFor(int index) noexcept;
 
 #undef SF2GeneratorValue
 }

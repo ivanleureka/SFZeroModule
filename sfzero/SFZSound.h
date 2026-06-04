@@ -45,6 +45,9 @@ public:
 
   Region *getRegionFor(int note, int velocity, Region::Trigger trigger = Region::attack);
   int getNumRegions() const noexcept { return regions_.size(); }
+  // juce::Array::operator[] is range-safe (returns nullptr out of range) and
+  // does not throw, so this getter is genuinely noexcept (C26447 conservative).
+#pragma warning(suppress : 26447)
   Region *regionAt(int index) const noexcept { return regions_[index]; }
 
   const juce::StringArray &getErrors() const noexcept { return errors_; }

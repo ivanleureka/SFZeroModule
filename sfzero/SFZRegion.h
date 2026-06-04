@@ -26,8 +26,8 @@ struct EGParameters
   float sustain = 0.0f;
   float release = 0.0f;
 
-  void clear();
-  void clearMod();
+  void clear() noexcept;
+  void clearMod() noexcept;
 };
 
 struct Region
@@ -61,10 +61,10 @@ struct Region
   Region& operator=(const Region&) = default;
   Region& operator=(Region&&) noexcept = default;
 
-  void clear();
+  void clear() noexcept;
   void clearForSF2();
   void clearForRelativeSF2();
-  void addForSF2(Region *other);
+  void addForSF2(const Region *other) noexcept;
   void sf2ToSFZ();
   juce::String dump();
 
@@ -114,9 +114,9 @@ struct Region
   float freqVibLFO = 0.0f;              // absolute cents (0 -> 8.176 Hz)
   float vibLfoToPitch = 0.0f;           // cents (full-scale LFO contribution)
 
-  static float timecents2Secs(int timecents);
-  static float absoluteCentsToHz(float cents);
-  static float centibelsToLinear(float cb);
+  static float timecents2Secs(int timecents) noexcept;
+  static float absoluteCentsToHz(float cents) noexcept;
+  static float centibelsToLinear(float cb) noexcept;
 };
 }
 

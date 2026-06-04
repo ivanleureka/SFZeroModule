@@ -5,6 +5,8 @@
  * For license info please see the LICENSE file distributed with this source code
  *************************************************************************************/
 #include "SF2Generator.h"
+#include "SFZSafeCast.h"
+#include <span>
 
 #define SF2GeneratorValue(name, type)                                                                                            \
   {                                                                                                                              \
@@ -19,13 +21,17 @@ static const sfzero::SF2Generator generators[] = {
 
 #undef SF2GeneratorValue
 
-const sfzero::SF2Generator *sfzero::GeneratorFor(int index)
+const sfzero::SF2Generator *sfzero::GeneratorFor(int index) noexcept
 {
-  static const int numGenerators = sizeof(generators) / sizeof(generators[0]);
+#pragma warning(push)
+#pragma warning(disable : 26446)   // span::operator[] is unchecked; indices are span-bounded (file-load, not real-time)
+  const std::span<const sfzero::SF2Generator> gens{generators};
 
-  if (index >= numGenerators)
+  if (index < 0 || sfzero::narrowCast<size_t>(index) >= gens.size())
   {
     return nullptr;
   }
-  return &generators[index];
+  // Index was bounds-checked above, so operator[] is span-bounded here despite noexcept.
+  return &gens[sfzero::narrowCast<size_t>(index)];
+#pragma warning(pop)
 }

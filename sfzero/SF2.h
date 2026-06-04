@@ -127,7 +127,7 @@ struct Hydra
   ~Hydra() = default;
 
   void readFrom(juce::InputStream *file, juce::int64 pdtaChunkEnd);
-  bool isComplete();
+  bool isComplete() noexcept;
 };
 }
 }

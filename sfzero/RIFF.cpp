@@ -5,24 +5,29 @@
  * For license info please see the LICENSE file distributed with this source code
  *************************************************************************************/
 #include "RIFF.h"
+#include "SFZSafeCast.h"
+#include <span>
 
 void sfzero::RIFFChunk::readFrom(juce::InputStream *file)
 {
-  file->read(&id, sizeof(sfzero::fourcc));
-  size = static_cast<sfzero::dword>(file->readInt());
+  // span view over the fourcc so the read target is bounds-described rather
+  // than relying on array-to-pointer decay.
+  const std::span<char> idBytes{id};
+  file->read(idBytes.data(), narrowCast<int>(idBytes.size()));
+  size = sfzero::narrowCast<sfzero::dword>(file->readInt());
   start = file->getPosition();
 
   if (FourCCEquals(id, "RIFF"))
   {
     type = RIFF;
-    file->read(&id, sizeof(sfzero::fourcc));
+    file->read(idBytes.data(), narrowCast<int>(idBytes.size()));
     start += sizeof(sfzero::fourcc);
     size -= sizeof(sfzero::fourcc);
   }
   else if (FourCCEquals(id, "LIST"))
   {
     type = LIST;
-    file->read(&id, sizeof(sfzero::fourcc));
+    file->read(idBytes.data(), narrowCast<int>(idBytes.size()));
     start += sizeof(sfzero::fourcc);
     size -= sizeof(sfzero::fourcc);
   }
@@ -58,6 +63,6 @@ juce::String sfzero::RIFFChunk::readString(juce::InputStream *file)
   }
 
   juce::MemoryBlock memoryBlock(size);
-  file->read(memoryBlock.getData(), static_cast<int>(memoryBlock.getSize()));
+  file->read(memoryBlock.getData(), sfzero::narrowCast<int>(memoryBlock.getSize()));
   return memoryBlock.toString();
 }

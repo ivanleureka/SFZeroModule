@@ -8,16 +8,17 @@
 #include "SFZSound.h"
 #include "SF2SoundInstance.h"
 #include "SFZVoice.h"
+#include "SFZSafeCast.h"
 
-sfzero::Synth::Synth() : Synthesiser() {}
+sfzero::Synth::Synth() noexcept : Synthesiser() {}
 
 void sfzero::Synth::noteOn(int midiChannel, int midiNoteNumber, float velocity)
 {
-  int i;
+  int i = 0;
 
   const juce::ScopedLock locker(lock);
 
-  int midiVelocity = static_cast<int>(velocity * 127);
+  const int midiVelocity = narrowCast<int>(velocity * 127);
 
   // Get the sound - check for both Sound and SF2SoundInstance
   sfzero::Sound *sound = nullptr;
@@ -45,7 +46,7 @@ void sfzero::Synth::noteOn(int midiChannel, int midiNoteNumber, float velocity)
     const int numRegions = sound->getNumRegions();
     for (int r = 0; r < numRegions; ++r)
     {
-      sfzero::Region *region = sound->regionAt(r);
+      const sfzero::Region *region = sound->regionAt(r);
       if (region && region->matches(midiNoteNumber, midiVelocity, groupCheckTrigger) && region->group != 0)
       {
         groupsTriggered.add(region->group);
@@ -57,7 +58,7 @@ void sfzero::Synth::noteOn(int midiChannel, int midiNoteNumber, float velocity)
     const int numRegions = soundInstance->getNumRegions();
     for (int r = 0; r < numRegions; ++r)
     {
-      sfzero::Region *region = soundInstance->regionAt(r);
+      const sfzero::Region *region = soundInstance->regionAt(r);
       if (region && region->matches(midiNoteNumber, midiVelocity, groupCheckTrigger) && region->group != 0)
       {
         groupsTriggered.add(region->group);
@@ -74,7 +75,7 @@ void sfzero::Synth::noteOn(int midiChannel, int midiNoteNumber, float velocity)
       {
         continue;
       }
-      const int voiceOffBy = static_cast<int>(voice->getOffBy());
+      const int voiceOffBy = narrowCast<int>(voice->getOffBy());
       if (voiceOffBy != 0 && groupsTriggered.contains(voiceOffBy))
       {
         voice->stopNoteForGroup();
@@ -112,12 +113,12 @@ void sfzero::Synth::noteOn(int midiChannel, int midiNoteNumber, float velocity)
   }
 
   // Play *all* matching regions.
-  sfzero::Region::Trigger trigger = (anyNotesPlaying ? sfzero::Region::legato : sfzero::Region::first);
+  const sfzero::Region::Trigger trigger = (anyNotesPlaying ? sfzero::Region::legato : sfzero::Region::first);
 
   // Handle Sound type
   if (sound)
   {
-    int numRegions = sound->getNumRegions();
+    const int numRegions = sound->getNumRegions();
     for (i = 0; i < numRegions; ++i)
     {
       sfzero::Region *region = sound->regionAt(i);
@@ -136,7 +137,7 @@ void sfzero::Synth::noteOn(int midiChannel, int midiNoteNumber, float velocity)
   // Handle SF2SoundInstance type
   else if (soundInstance)
   {
-    int numRegions = soundInstance->getNumRegions();
+    const int numRegions = soundInstance->getNumRegions();
     for (i = 0; i < numRegions; ++i)
     {
       sfzero::Region *region = soundInstance->regionAt(i);
@@ -153,6 +154,10 @@ void sfzero::Synth::noteOn(int midiChannel, int midiNoteNumber, float velocity)
     }
   }
 
+  // midiNoteNumber is a MIDI note (0-127) and noteVelocities_ is int[128];
+  // index is in range by the MIDI spec. .at() would add a throwing check on the
+  // real-time note path, so the fixed-array index is suppressed (C26446/C26482).
+#pragma warning(suppress : 26446 26482)
   noteVelocities_[midiNoteNumber] = midiVelocity;
 }
 
@@ -179,9 +184,15 @@ void sfzero::Synth::noteOff(int midiChannel, int midiNoteNumber, float velocity,
 
   sfzero::Region *region = nullptr;
 
+  // Cache the stored velocity once. midiNoteNumber is a MIDI note (0-127) and
+  // noteVelocities_ is int[128], so the index is in range by the MIDI spec;
+  // .at() would add a throwing check on the real-time note path (C26446/C26482).
+#pragma warning(suppress : 26446 26482)
+  const int noteVelocity = noteVelocities_[midiNoteNumber];
+
   if (sound)
   {
-    region = sound->getRegionFor(midiNoteNumber, noteVelocities_[midiNoteNumber], sfzero::Region::release);
+    region = sound->getRegionFor(midiNoteNumber, noteVelocity, sfzero::Region::release);
     if (region)
     {
       sfzero::Voice *voice = dynamic_cast<sfzero::Voice *>(findFreeVoice(sound, midiNoteNumber, midiChannel, false));
@@ -190,26 +201,26 @@ void sfzero::Synth::noteOff(int midiChannel, int midiNoteNumber, float velocity,
         // Synthesiser is too locked-down (ivars are private rt protected), so
         // we have to use a "setRegion()" mechanism.
         voice->setRegion(region);
-        startVoice(voice, sound, midiChannel, midiNoteNumber, noteVelocities_[midiNoteNumber] / 127.0f);
+        startVoice(voice, sound, midiChannel, midiNoteNumber, noteVelocity / 127.0f);
       }
     }
   }
   else if (soundInstance)
   {
-    region = soundInstance->getRegionFor(midiNoteNumber, noteVelocities_[midiNoteNumber], sfzero::Region::release);
+    region = soundInstance->getRegionFor(midiNoteNumber, noteVelocity, sfzero::Region::release);
     if (region)
     {
       sfzero::Voice *voice = dynamic_cast<sfzero::Voice *>(findFreeVoice(soundInstance, midiNoteNumber, midiChannel, false));
       if (voice)
       {
         voice->setRegion(region);
-        startVoice(voice, soundInstance, midiChannel, midiNoteNumber, noteVelocities_[midiNoteNumber] / 127.0f);
+        startVoice(voice, soundInstance, midiChannel, midiNoteNumber, noteVelocity / 127.0f);
       }
     }
   }
 }
 
-int sfzero::Synth::numVoicesUsed()
+int sfzero::Synth::numVoicesUsed() noexcept
 {
   int numUsed = 0;
 
@@ -298,7 +309,7 @@ std::vector<sfzero::Voice*> sfzero::Synth::releaseAllVoices()
   return released;
 }
 
-sfzero::Voice* sfzero::Synth::getVoiceAt(int index) const
+sfzero::Voice* sfzero::Synth::getVoiceAt(int index) const noexcept
 {
   if (index < 0 || index >= voices.size())
     return nullptr;

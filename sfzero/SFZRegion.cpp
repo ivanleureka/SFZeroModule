@@ -7,17 +7,17 @@
 #include "SFZRegion.h"
 #include "SFZSample.h"
 
-void sfzero::EGParameters::clear()
+void sfzero::EGParameters::clear() noexcept
 {
   *this = EGParameters{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 100.0f, 0.0f};
 }
 
-void sfzero::EGParameters::clearMod()
+void sfzero::EGParameters::clearMod() noexcept
 {
   *this = EGParameters{};
 }
 
-void sfzero::Region::clear()
+void sfzero::Region::clear() noexcept
 {
   *this = Region{};
 }
@@ -64,7 +64,7 @@ void sfzero::Region::clearForRelativeSF2()
   modeg.release = 0.0f;
 }
 
-void sfzero::Region::addForSF2(sfzero::Region *other)
+void sfzero::Region::addForSF2(const sfzero::Region *other) noexcept
 {
   offset += other->offset;
   end += other->end;
@@ -177,15 +177,15 @@ juce::String sfzero::Region::dump()
   return info;
 }
 
-float sfzero::Region::timecents2Secs(int timecents) { return static_cast<float>(pow(2.0, timecents / 1200.0)); }
+float sfzero::Region::timecents2Secs(int timecents) noexcept { return static_cast<float>(pow(2.0, timecents / 1200.0)); }
 
-float sfzero::Region::absoluteCentsToHz(float cents)
+float sfzero::Region::absoluteCentsToHz(float cents) noexcept
 {
   // SF2 spec: f = 8.176 * 2^(cents/1200). 0 cents -> 8.176 Hz, 13500 -> ~20 kHz.
   return 8.176f * static_cast<float>(pow(2.0, cents / 1200.0));
 }
 
-float sfzero::Region::centibelsToLinear(float cb)
+float sfzero::Region::centibelsToLinear(float cb) noexcept
 {
   // 200 centibels = 1x gain ratio change in linear amplitude (per SF2 spec,
   // initialFilterQ uses centibels of resonance gain).

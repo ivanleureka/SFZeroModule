@@ -14,10 +14,16 @@ namespace sfzero
 class EG
 {
 public:
-  EG();
+  EG() noexcept;
   virtual ~EG() {}
 
-  void setExponentialDecay(bool newExponentialDecay);
+  // Rule of five: copy ops are deleted by JUCE_DECLARE_NON_COPYABLE below;
+  // explicitly delete the move ops too to satisfy C26432 without re-declaring
+  // copy (which would clash with the macro).
+  EG(EG &&) = delete;
+  EG &operator=(EG &&) = delete;
+
+  void setExponentialDecay(bool newExponentialDecay) noexcept;
   void startNote(const EGParameters *parameters, float floatVelocity, double sampleRate, const EGParameters *velMod = nullptr);
   void nextSegment();
   void noteOff();

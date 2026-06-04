@@ -13,9 +13,9 @@
 #include <cmath>
 #include <math.h>
 
-static const float globalGain = -1.0;
+static constexpr float globalGain = -1.0f;
 
-sfzero::Voice::Voice()
+sfzero::Voice::Voice() noexcept
     : region_(nullptr), trigger_(0), curMidiNote_(0), curPitchWheel_(0), pitchRatio_(0), noteGainLeft_(0), noteGainRight_(0),
       sourceSamplePosition_(0), sampleEnd_(0), loopStart_(0), loopEnd_(0),
       bufferKeepAlive_(), inL_(nullptr), inR_(nullptr), bufferNumSamples_(0),
@@ -27,7 +27,7 @@ sfzero::Voice::Voice()
   ampeg_.setExponentialDecay(true);
 }
 
-sfzero::Voice::~Voice() {}
+sfzero::Voice::~Voice() = default;
 
 bool sfzero::Voice::canPlaySound(juce::SynthesiserSound *sound)
 {
@@ -53,7 +53,7 @@ void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::Syn
     }
   }
 
-  int velocity = static_cast<int>(floatVelocity * 127.0);
+  const int velocity = static_cast<int>(floatVelocity * 127.0);
   curVelocity_ = velocity;
   if (region_ == nullptr)
   {
@@ -92,7 +92,10 @@ void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::Syn
   // Thanks to <http:://www.drealm.info/sfz/plj-sfz.xhtml> for explaining the
   // velocity curve in a way that I could understand, although they mean
   // "log10" when they say "log".
-  double velocityGainDB = -20.0 * log10((127.0 * 127.0) / (velocity * velocity));
+  // Widen velocity to double before squaring so the multiply can't overflow a
+  // 32-bit int before the division (C26451).
+  const double velocityD = static_cast<double>(velocity);
+  double velocityGainDB = -20.0 * log10((127.0 * 127.0) / (velocityD * velocityD));
   velocityGainDB *= region_->amp_veltrack / 100.0;
   noteGainDB += velocityGainDB;
   noteGainLeft_ = noteGainRight_ = static_cast<float>(juce::Decibels::decibelsToGain(noteGainDB));
@@ -117,7 +120,7 @@ void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::Syn
   {
     const double sr = getSampleRate();
     const float vibFreqHz = sfzero::Region::absoluteCentsToHz(region_->freqVibLFO);
-    const float twoPi = 2.0f * juce::MathConstants<float>::pi;
+    constexpr float twoPi = 2.0f * juce::MathConstants<float>::pi;
     vibPhase_ = 0.0f;
     vibPhaseInc_ = twoPi * vibFreqHz / static_cast<float>(sr);
     const float delaySecs = sfzero::Region::timecents2Secs(static_cast<int>(region_->delayVibLFO));
@@ -263,7 +266,7 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
   // Cached at startNote() — render path does not re-dereference region_->sample.
   const float *inL = inL_;
   const float *inR = inR_;
-  int bufferNumSamples = bufferNumSamples_;
+  const int bufferNumSamples = bufferNumSamples_;
 
   float *outL = outputBuffer.getWritePointer(0, startSample);
   float *outR = outputBuffer.getNumChannels() > 1 ? outputBuffer.getWritePointer(1, startSample) : nullptr;
@@ -275,9 +278,9 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
   float ampegSlope = ampeg_.getSlope();
   int samplesUntilNextAmpSegment = ampeg_.getSamplesUntilNextSegment();
   bool ampSegmentIsExponential = ampeg_.getSegmentIsExponential();
-  float loopStart = static_cast<float>(this->loopStart_);
-  float loopEnd = static_cast<float>(this->loopEnd_);
-  float sampleEnd = static_cast<float>(this->sampleEnd_);
+  const float loopStart = static_cast<float>(this->loopStart_);
+  const float loopEnd = static_cast<float>(this->loopEnd_);
+  const float sampleEnd = static_cast<float>(this->sampleEnd_);
 
   // Phase C - mod-env / vibrato state cached the same way ampeg is.
   // effectivePitchRatio is the pitch ratio after envelope/LFO modulation; we
@@ -290,7 +293,7 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
   const float modEnvToFilterFc = region_->modEnvToFilterFc;
   const float initialFilterFc = region_->initialFilterFc;
   const float vibLfoToPitch = region_->vibLfoToPitch;
-  const float twoPi = 2.0f * juce::MathConstants<float>::pi;
+  constexpr float twoPi = 2.0f * juce::MathConstants<float>::pi;
   const bool pitchModActive = modegPitchActive_ || vibInUse_;
   const bool needsControlRateUpdate = pitchModActive || modegFilterActive_;
   double effectivePitchRatio = pitchRatio_;
@@ -305,16 +308,23 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
     modSegmentIsExponential = modeg_.getSegmentIsExponential();
   }
   float vibPhase = vibPhase_;
-  float vibPhaseInc = vibPhaseInc_;
+  const float vibPhaseInc = vibPhaseInc_;
   int vibDelaySamples = vibDelaySamples_;
-  static const int kModUpdateRate = 32;
+  static constexpr int kModUpdateRate = 32;
   int modUpdateCounter = 0;
 
+  // Real-time per-sample render loop. The interpolation and output writes index
+  // the cached audio pointers (inL/inR/outL/outR); this pointer arithmetic
+  // (C26481) is bounded by bufferNumSamples / numSamples and must stay branch-
+  // and throw-free on the audio thread, so .at()/span are not used here. The
+  // C26481 checks are suppressed for the loop body.
+#pragma warning(push)
+#pragma warning(disable : 26481)
   while (--numSamples >= 0)
   {
-    int pos = static_cast<int>(sourceSamplePosition);
-    float alpha = static_cast<float>(sourceSamplePosition - pos);
-    float invAlpha = 1.0f - alpha;
+    const int pos = static_cast<int>(sourceSamplePosition);
+    const float alpha = static_cast<float>(sourceSamplePosition - pos);
+    const float invAlpha = 1.0f - alpha;
     int nextPos = pos + 1;
     if ((loopStart < loopEnd) && (nextPos > loopEnd))
     {
@@ -322,8 +332,8 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
     }
 
     // Simple linear interpolation with buffer overrun check
-    float nextL = nextPos < bufferNumSamples ? inL[nextPos] : inL[pos];
-    float nextR = inR ? (nextPos < bufferNumSamples ? inR[nextPos] : inR[pos]) : nextL;
+    const float nextL = nextPos < bufferNumSamples ? inL[nextPos] : inL[pos];
+    const float nextR = inR ? (nextPos < bufferNumSamples ? inR[nextPos] : inR[pos]) : nextL;
     float l = (inL[pos] * invAlpha + nextL * alpha);
     float r = inR ? (inR[pos] * invAlpha + nextR * alpha) : l;
 
@@ -347,8 +357,8 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
       }
     }
 
-    float gainLeft = noteGainLeft_ * ampegGain;
-    float gainRight = noteGainRight_ * ampegGain;
+    const float gainLeft = noteGainLeft_ * ampegGain;
+    const float gainRight = noteGainRight_ * ampegGain;
     l *= gainLeft;
     r *= gainRight;
     // Shouldn't we dither here?
@@ -464,6 +474,7 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
       break;
     }
   }
+#pragma warning(pop)
 
   this->sourceSamplePosition_ = sourceSamplePosition;
   ampeg_.setLevel(ampegGain);
@@ -488,7 +499,7 @@ int sfzero::Voice::getGroup() const noexcept { return region_ ? region_->group :
 
 juce::uint64 sfzero::Voice::getOffBy() const noexcept { return region_ ? region_->off_by : 0; }
 
-void sfzero::Voice::setRegion(sfzero::Region *nextRegion) { region_ = nextRegion; }
+void sfzero::Voice::setRegion(sfzero::Region *nextRegion) noexcept { region_ = nextRegion; }
 
 juce::String sfzero::Voice::infoString()
 {
@@ -508,7 +519,7 @@ void sfzero::Voice::calcPitchRatio()
   double adjustedPitch = region_->pitch_keycenter + (note - region_->pitch_keycenter) * (region_->pitch_keytrack / 100.0);
   if (curPitchWheel_ != 8192)
   {
-    double wheel = ((2.0 * curPitchWheel_ / 16383.0) - 1.0);
+    const double wheel = ((2.0 * curPitchWheel_ / 16383.0) - 1.0);
     if (wheel > 0)
     {
       adjustedPitch += wheel * region_->bend_up / 100.0;
@@ -518,8 +529,8 @@ void sfzero::Voice::calcPitchRatio()
       adjustedPitch += wheel * region_->bend_down / -100.0;
     }
   }
-  double targetFreq = fractionalMidiNoteInHz(adjustedPitch);
-  double naturalFreq = juce::MidiMessage::getMidiNoteInHertz(region_->pitch_keycenter);
+  const double targetFreq = fractionalMidiNoteInHz(adjustedPitch);
+  const double naturalFreq = juce::MidiMessage::getMidiNoteInHertz(region_->pitch_keycenter);
   pitchRatio_ = (targetFreq * region_->sample->getSampleRate()) / (naturalFreq * getSampleRate());
 }
 
@@ -533,7 +544,7 @@ void sfzero::Voice::killNote()
   clearCurrentNote();
 }
 
-double sfzero::Voice::fractionalMidiNoteInHz(double note, double freqOfA)
+double sfzero::Voice::fractionalMidiNoteInHz(double note, double freqOfA) noexcept
 {
   // Like MidiMessage::getMidiNoteInHertz(), but with a float note.
   note -= 69;

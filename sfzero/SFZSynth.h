@@ -17,13 +17,18 @@ class Voice;
 class Synth : public juce::Synthesiser
 {
 public:
-  Synth();
+  Synth() noexcept;
   virtual ~Synth() override {}
+
+  // Rule of five: copy ops deleted by JUCE_DECLARE_NON_COPYABLE below; delete
+  // move ops too (C26432) without re-declaring copy.
+  Synth(Synth &&) = delete;
+  Synth &operator=(Synth &&) = delete;
 
   void noteOn(int midiChannel, int midiNoteNumber, float velocity) override;
   void noteOff(int midiChannel, int midiNoteNumber, float velocity, bool allowTailOff) override;
 
-  int numVoicesUsed();
+  int numVoicesUsed() noexcept;
   juce::String voiceInfoString();
 
   //==============================================================================
@@ -52,10 +57,13 @@ public:
       @param index  The index of the voice
       @return       The voice at the given index, or nullptr if invalid
   */
-  Voice* getVoiceAt(int index) const;
+  Voice* getVoiceAt(int index) const noexcept;
 
 private:
-  int noteVelocities_[128];
+  // Per-note velocity cache, indexed by MIDI note (0-127). Default-initialised
+  // so noteOff() can never read an indeterminate value before the matching
+  // noteOn() populated it (root-cause fix for C26495).
+  int noteVelocities_[128] = {};
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Synth)
 };
 }

@@ -9,6 +9,9 @@
 #include "SF2.h"
 #include "SF2Generator.h"
 #include "SF2Sound.h"
+#include "SFZSafeCast.h"
+#include <array>
+#include <span>
 #include <vector>
 
 sfzero::SF2Reader::SF2Reader(sfzero::SF2Sound *soundIn, const juce::File &fileIn)
@@ -17,7 +20,7 @@ sfzero::SF2Reader::SF2Reader(sfzero::SF2Sound *soundIn, const juce::File &fileIn
 {
 }
 
-sfzero::SF2Reader::SF2Reader(sfzero::SF2Sound *soundIn, std::unique_ptr<juce::InputStream> stream)
+sfzero::SF2Reader::SF2Reader(sfzero::SF2Sound *soundIn, std::unique_ptr<juce::InputStream> stream) noexcept
     : sound_(soundIn)
     , file_(std::move(stream))
 {
@@ -25,6 +28,8 @@ sfzero::SF2Reader::SF2Reader(sfzero::SF2Sound *soundIn, std::unique_ptr<juce::In
 
 void sfzero::SF2Reader::read()
 {
+#pragma warning(push)
+#pragma warning(disable : 26446)   // span::operator[] is unchecked; indices are span-bounded (file-load, not real-time)
   if (file_ == nullptr)
   {
     sound_->addError("Couldn't open file.");
@@ -53,33 +58,44 @@ void sfzero::SF2Reader::read()
     return;
   }
 
+  // Span views over the parsed hydra arrays so element access and the SF2
+  // "next item" index lookups are bounds-described rather than raw pointer
+  // arithmetic. (File-load path, not real-time: operator[] is span-bounded.)
+  const std::span<sfzero::SF2::phdr> phdrItems{hydra.phdrItems.get(), narrowCast<size_t>(hydra.phdrNumItems)};
+  const std::span<sfzero::SF2::pbag> pbagItems{hydra.pbagItems.get(), narrowCast<size_t>(hydra.pbagNumItems)};
+  const std::span<sfzero::SF2::pgen> pgenItems{hydra.pgenItems.get(), narrowCast<size_t>(hydra.pgenNumItems)};
+  const std::span<sfzero::SF2::inst> instItems{hydra.instItems.get(), narrowCast<size_t>(hydra.instNumItems)};
+  const std::span<sfzero::SF2::ibag> ibagItems{hydra.ibagItems.get(), narrowCast<size_t>(hydra.ibagNumItems)};
+  const std::span<sfzero::SF2::igen> igenItems{hydra.igenItems.get(), narrowCast<size_t>(hydra.igenNumItems)};
+  const std::span<sfzero::SF2::shdr> shdrItems{hydra.shdrItems.get(), narrowCast<size_t>(hydra.shdrNumItems)};
+
   // Read each preset.
   for (int whichPreset = 0; whichPreset < hydra.phdrNumItems - 1; ++whichPreset)
   {
-    sfzero::SF2::phdr *phdr = &hydra.phdrItems[whichPreset];
-    auto presetOwner = std::make_unique<sfzero::SF2Sound::Preset>(phdr->presetName, phdr->bank, phdr->preset);
+    const sfzero::SF2::phdr &phdr = phdrItems[narrowCast<size_t>(whichPreset)];
+    auto presetOwner = std::make_unique<sfzero::SF2Sound::Preset>(phdr.presetName, phdr.bank, phdr.preset);
     sfzero::SF2Sound::Preset *preset = presetOwner.get(); // Borrowed view used below; lifetime owned by SF2Sound::presets_ after addPreset.
     sound_->addPreset(std::move(presetOwner));
 
     // Zones.
     //*** TODO: Handle global zone (modulators only).
-    int zoneEnd = phdr[1].presetBagNdx;
-    for (int whichZone = phdr->presetBagNdx; whichZone < zoneEnd; ++whichZone)
+    const int zoneEnd = phdrItems[narrowCast<size_t>(whichPreset) + 1].presetBagNdx;
+    for (int whichZone = phdr.presetBagNdx; whichZone < zoneEnd; ++whichZone)
     {
-      sfzero::SF2::pbag *pbag = &hydra.pbagItems[whichZone];
+      const sfzero::SF2::pbag &pbag = pbagItems[narrowCast<size_t>(whichZone)];
       sfzero::Region presetRegion;
       presetRegion.clearForRelativeSF2();
 
       // Generators.
-      int genEnd = pbag[1].genNdx;
-      for (int whichGen = pbag->genNdx; whichGen < genEnd; ++whichGen)
+      const int genEnd = pbagItems[narrowCast<size_t>(whichZone) + 1].genNdx;
+      for (int whichGen = pbag.genNdx; whichGen < genEnd; ++whichGen)
       {
-        sfzero::SF2::pgen *pgen = &hydra.pgenItems[whichGen];
+        const sfzero::SF2::pgen &pgen = pgenItems[narrowCast<size_t>(whichGen)];
 
         // Instrument.
-        if (pgen->genOper == sfzero::SF2Generator::instrument)
+        if (pgen.genOper == sfzero::SF2Generator::instrument)
         {
-          sfzero::word whichInst = pgen->genAmount.wordAmount;
+          const sfzero::word whichInst = pgen.genAmount.wordAmount;
           if (whichInst < hydra.instNumItems)
           {
             sfzero::Region instRegion;
@@ -93,39 +109,39 @@ void sfzero::SF2Reader::read()
             instRegion.lovel = presetRegion.lovel;
             instRegion.hivel = presetRegion.hivel;
 
-            sfzero::SF2::inst *inst = &hydra.instItems[whichInst];
-            int firstZone = inst->instBagNdx;
-            int zoneEnd2 = inst[1].instBagNdx;
+            const sfzero::SF2::inst &inst = instItems[whichInst];
+            const int firstZone = inst.instBagNdx;
+            const int zoneEnd2 = instItems[narrowCast<size_t>(whichInst) + 1].instBagNdx;
             for (int whichZone2 = firstZone; whichZone2 < zoneEnd2; ++whichZone2)
             {
-              sfzero::SF2::ibag *ibag = &hydra.ibagItems[whichZone2];
+              const sfzero::SF2::ibag &ibag = ibagItems[narrowCast<size_t>(whichZone2)];
 
               // Generators.
               sfzero::Region zoneRegion = instRegion;
               bool hadSampleID = false;
-              int genEnd2 = ibag[1].instGenNdx;
-              for (int whichGen2 = ibag->instGenNdx; whichGen2 < genEnd2; ++whichGen2)
+              const int genEnd2 = ibagItems[narrowCast<size_t>(whichZone2) + 1].instGenNdx;
+              for (int whichGen2 = ibag.instGenNdx; whichGen2 < genEnd2; ++whichGen2)
               {
-                sfzero::SF2::igen *igen = &hydra.igenItems[whichGen2];
-                if (igen->genOper == sfzero::SF2Generator::sampleID)
+                const sfzero::SF2::igen &igen = igenItems[narrowCast<size_t>(whichGen2)];
+                if (igen.genOper == sfzero::SF2Generator::sampleID)
                 {
-                  int whichSample = igen->genAmount.wordAmount;
-                  sfzero::SF2::shdr *shdr = &hydra.shdrItems[whichSample];
+                  const int whichSample = igen.genAmount.wordAmount;
+                  const sfzero::SF2::shdr &shdr = shdrItems[narrowCast<size_t>(whichSample)];
                   zoneRegion.addForSF2(&presetRegion);
                   zoneRegion.sf2ToSFZ();
-                  zoneRegion.offset += shdr->start;
-                  zoneRegion.end += shdr->end;
-                  zoneRegion.loop_start += shdr->startLoop;
-                  zoneRegion.loop_end += shdr->endLoop;
-                  if (shdr->endLoop > 0)
+                  zoneRegion.offset += shdr.start;
+                  zoneRegion.end += shdr.end;
+                  zoneRegion.loop_start += shdr.startLoop;
+                  zoneRegion.loop_end += shdr.endLoop;
+                  if (shdr.endLoop > 0)
                   {
                     zoneRegion.loop_end -= 1;
                   }
                   if (zoneRegion.pitch_keycenter == -1)
                   {
-                    zoneRegion.pitch_keycenter = shdr->originalPitch;
+                    zoneRegion.pitch_keycenter = shdr.originalPitch;
                   }
-                  zoneRegion.tune += shdr->pitchCorrection;
+                  zoneRegion.tune += shdr.pitchCorrection;
 
                   // Pin initialAttenuation to max +6dB.
                   if (zoneRegion.volume > 6.0)
@@ -136,13 +152,13 @@ void sfzero::SF2Reader::read()
 
                   auto newRegion = std::make_unique<sfzero::Region>();
                   *newRegion = zoneRegion;
-                  newRegion->sample = sound_->sampleFor(shdr->sampleRate);
+                  newRegion->sample = sound_->sampleFor(shdr.sampleRate);
                   preset->addRegion(std::move(newRegion));
                   hadSampleID = true;
                 }
                 else
                 {
-                  addGeneratorToRegion(igen->genOper, &igen->genAmount, &zoneRegion);
+                  addGeneratorToRegion(igen.genOper, &igen.genAmount, &zoneRegion);
                 }
               }
 
@@ -153,8 +169,8 @@ void sfzero::SF2Reader::read()
               }
 
               // Modulators.
-              int modEnd = ibag[1].instModNdx;
-              int whichMod = ibag->instModNdx;
+              const int modEnd = ibagItems[narrowCast<size_t>(whichZone2) + 1].instModNdx;
+              const int whichMod = ibag.instModNdx;
               if (whichMod < modEnd)
               {
                 sound_->addUnsupportedOpcode(
@@ -172,28 +188,31 @@ void sfzero::SF2Reader::read()
         // Other generators.
         else
         {
-          addGeneratorToRegion(pgen->genOper, &pgen->genAmount, &presetRegion);
+          addGeneratorToRegion(pgen.genOper, &pgen.genAmount, &presetRegion);
         }
       }
 
       // Modulators. The first zone of each preset is the global zone
       // (modulators only) per SF2 spec; tag it distinctly.
-      int modEnd = pbag[1].modNdx;
-      int whichMod = pbag->modNdx;
+      const int modEnd = pbagItems[narrowCast<size_t>(whichZone) + 1].modNdx;
+      const int whichMod = pbag.modNdx;
       if (whichMod < modEnd)
       {
         sound_->addUnsupportedOpcode(
-            (whichZone == phdr->presetBagNdx)
+            (whichZone == phdr.presetBagNdx)
                 ? "preset global zone modulator"
                 : "preset zone modulator");
       }
     }
   }
+#pragma warning(pop)
 }
 
 std::shared_ptr<juce::AudioSampleBuffer> sfzero::SF2Reader::readSamples(double *progressVar, juce::Thread *thread)
 {
-  static const int bufferSize = 32768;
+#pragma warning(push)
+#pragma warning(disable : 26446)   // span::operator[] is unchecked; indices are span-bounded (file-load, not real-time)
+  constexpr int bufferSize = 32768;
 
   if (file_ == nullptr)
   {
@@ -205,19 +224,28 @@ std::shared_ptr<juce::AudioSampleBuffer> sfzero::SF2Reader::readSamples(double *
   file_->setPosition(0);
   sfzero::RIFFChunk riffChunk;
   riffChunk.readFrom(file_.get());
-  bool found = false;
+  bool foundSdta = false;
   sfzero::RIFFChunk chunk;
   while (file_->getPosition() < riffChunk.end())
   {
     chunk.readFrom(file_.get());
     if (FourCCEquals(chunk.id, "sdta"))
     {
+      foundSdta = true;
       break;
     }
     chunk.seekAfter(file_.get());
   }
-  juce::int64 sdtaEnd = chunk.end();
-  found = false;
+  // Guard: if no "sdta" chunk was found, `chunk` describes the last chunk we
+  // scanned (or is zero-initialised) and chunk.end() would be meaningless — bail
+  // before reading it. (Fixes C6001: read of uninitialised/stale chunk.end().)
+  if (!foundSdta)
+  {
+    sound_->addError("SF2 is missing its \"sdta\" chunk.");
+    return nullptr;
+  }
+  const juce::int64 sdtaEnd = chunk.end();
+  bool found = false;
   while (file_->getPosition() < sdtaEnd)
   {
     chunk.readFrom(file_.get());
@@ -235,13 +263,15 @@ std::shared_ptr<juce::AudioSampleBuffer> sfzero::SF2Reader::readSamples(double *
   }
 
   // Allocate the shared sample buffer; every SFZSample built from this SF2 will share it.
-  int numSamples = int (chunk.size / sizeof(short));
+  const int numSamples = narrowCast<int>(chunk.size / sizeof(short));
   auto sampleBuffer = std::make_shared<juce::AudioSampleBuffer>(1, numSamples);
 
-  // Read and convert using RAII buffer
+  // Read and convert using RAII buffer. Span views replace raw pointer
+  // arithmetic over the read buffer and the destination channel.
   std::vector<short> buffer(bufferSize);
+  const std::span<float> outSamples{sampleBuffer->getWritePointer(0), narrowCast<size_t>(numSamples)};
   int samplesLeft = numSamples;
-  float *out = sampleBuffer->getWritePointer(0);
+  size_t outIndex = 0;
   while (samplesLeft > 0)
   {
     // Read the buffer.
@@ -250,16 +280,15 @@ std::shared_ptr<juce::AudioSampleBuffer> sfzero::SF2Reader::readSamples(double *
     {
       samplesToRead = samplesLeft;
     }
-    file_->read(buffer.data(), samplesToRead * sizeof(short));
+    file_->read(buffer.data(), samplesToRead * narrowCast<int>(sizeof(short)));
 
     // Convert from signed 16-bit to float.
-    int samplesToConvert = samplesToRead;
-    short *in = buffer.data();
-    for (; samplesToConvert > 0; --samplesToConvert)
+    const std::span<short> inSamples{buffer.data(), narrowCast<size_t>(samplesToRead)};
+    for (const short sampleValue : inSamples)
     {
       // If we ever need to compile for big-endian platforms, we'll need to
       // byte-swap here.
-      *out++ = *in++ / 32767.0f;
+      outSamples[outIndex++] = sampleValue / 32767.0f;
     }
 
     samplesLeft -= samplesToRead;
@@ -280,9 +309,10 @@ std::shared_ptr<juce::AudioSampleBuffer> sfzero::SF2Reader::readSamples(double *
   }
 
   return sampleBuffer;
+#pragma warning(pop)
 }
 
-void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, sfzero::SF2::genAmountType *amount, sfzero::Region *region)
+void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, const sfzero::SF2::genAmountType *amount, sfzero::Region *region)
 {
   switch (genOper)
   {
@@ -303,11 +333,11 @@ void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, sfzero::SF2::
     break;
 
   case sfzero::SF2Generator::startAddrsCoarseOffset:
-    region->offset += amount->shortAmount * 32768;
+    region->offset += juce::int64(amount->shortAmount) * 32768;
     break;
 
   case sfzero::SF2Generator::endAddrsCoarseOffset:
-    region->end += amount->shortAmount * 32768;
+    region->end += juce::int64(amount->shortAmount) * 32768;
     break;
 
   case sfzero::SF2Generator::pan:
@@ -349,7 +379,7 @@ void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, sfzero::SF2::
     break;
 
   case sfzero::SF2Generator::startloopAddrsCoarseOffset:
-    region->loop_start += amount->shortAmount * 32768;
+    region->loop_start += juce::int64(amount->shortAmount) * 32768;
     break;
 
   case sfzero::SF2Generator::initialAttenuation:
@@ -359,7 +389,7 @@ void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, sfzero::SF2::
     break;
 
   case sfzero::SF2Generator::endloopAddrsCoarseOffset:
-    region->loop_end += amount->shortAmount * 32768;
+    region->loop_end += juce::int64(amount->shortAmount) * 32768;
     break;
 
   case sfzero::SF2Generator::coarseTune:
@@ -372,9 +402,9 @@ void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, sfzero::SF2::
 
   case sfzero::SF2Generator::sampleModes:
   {
-    sfzero::Region::LoopMode loopModes[] = {sfzero::Region::no_loop, sfzero::Region::loop_continuous, sfzero::Region::no_loop,
-                                            sfzero::Region::loop_sustain};
-    region->loop_mode = loopModes[amount->wordAmount & 0x03];
+    static constexpr std::array<sfzero::Region::LoopMode, 4> loopModes = {
+        sfzero::Region::no_loop, sfzero::Region::loop_continuous, sfzero::Region::no_loop, sfzero::Region::loop_sustain};
+    region->loop_mode = loopModes.at(narrowCast<size_t>(amount->wordAmount & 0x03));
   }
   break;
 
@@ -384,7 +414,7 @@ void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, sfzero::SF2::
 
   case sfzero::SF2Generator::exclusiveClass:
     region->off_by = amount->wordAmount;
-    region->group = static_cast<int>(region->off_by);
+    region->group = narrowCast<int>(region->off_by);
     break;
 
   case sfzero::SF2Generator::overridingRootKey:
@@ -468,5 +498,10 @@ void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, sfzero::SF2::
     sound_->addUnsupportedOpcode(generator->name, amount->shortAmount);
   }
   break;
+
+  default:
+    // Operator outside the known SF2 generator enum range; ignore (matches the
+    // original fall-through-to-nothing behaviour, but explicit for C26818).
+    break;
   }
 }

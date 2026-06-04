@@ -26,6 +26,9 @@ sfzero::SF2Sound::~SF2Sound()
 {
   // regions_ is a borrowed view; ownership of these Regions lives in Preset::regions.
   // Clear the view explicitly so SFZSound's destructor sees an empty Array.
+  // juce::Array::clear() only frees storage and cannot throw, so it is safe in
+  // this implicitly-noexcept destructor.
+#pragma warning(suppress : 26447)
   getRegions().clear();
   // Sample objects are owned by samplesStorage_ (auto-deleted after this body).
   // The shared AudioSampleBuffer is held by std::shared_ptr inside each Sample,
@@ -35,9 +38,9 @@ sfzero::SF2Sound::~SF2Sound()
 class PresetComparator
 {
 public:
-  static int compareElements(const sfzero::SF2Sound::Preset *first, const sfzero::SF2Sound::Preset *second)
+  static int compareElements(const sfzero::SF2Sound::Preset *first, const sfzero::SF2Sound::Preset *second) noexcept
   {
-    int cmp = first->bank - second->bank;
+    const int cmp = first->bank - second->bank;
 
     if (cmp != 0)
     {
@@ -117,7 +120,9 @@ int sfzero::SF2Sound::numSubsounds() { return presets_.size(); }
 
 juce::String sfzero::SF2Sound::subsoundName(int whichSubsound)
 {
-  Preset *preset = presets_[whichSubsound];
+  // juce::OwnedArray::operator[] is range-safe (returns nullptr if out of range).
+#pragma warning(suppress : 26446)
+  const Preset *preset = presets_[whichSubsound];
   juce::String result;
 
   if (preset->bank != 0)
@@ -135,6 +140,8 @@ void sfzero::SF2Sound::useSubsound(int whichSubsound)
 {
   selectedPreset_ = whichSubsound;
   getRegions().clear();
+  // juce::OwnedArray::operator[] is range-safe (returns nullptr if out of range).
+#pragma warning(suppress : 26446)
   getRegions().addArray(presets_[whichSubsound]->regions);
 }
 

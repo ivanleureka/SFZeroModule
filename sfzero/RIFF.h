@@ -21,10 +21,10 @@ struct RIFFChunk
     Custom
   };
 
-  fourcc id;
-  dword size;
-  Type type;
-  juce::int64 start;
+  fourcc id = {};
+  dword size = 0;
+  Type type = Custom;
+  juce::int64 start = 0;
 
   void readFrom(juce::InputStream *file);
   void seek(juce::InputStream *file);

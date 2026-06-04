@@ -31,6 +31,11 @@ public:
 
   ~SF2SoundInstance() override;
 
+  // Rule of five: copy ops are deleted by JUCE_DECLARE_NON_COPYABLE below;
+  // this instance holds borrowed pointers and must not be moved either.
+  SF2SoundInstance(SF2SoundInstance &&) = delete;
+  SF2SoundInstance &operator=(SF2SoundInstance &&) = delete;
+
   using Ptr = juce::ReferenceCountedObjectPtr<SF2SoundInstance>;
 
   // SynthesiserSound interface
@@ -44,12 +49,15 @@ public:
   int selectedSubsound() const noexcept { return selectedPreset_; }
 
   // Region access for voices (borrowed pointers - do not delete)
-  Region* getRegionFor(int note, int velocity, Region::Trigger trigger = Region::attack);
+  Region* getRegionFor(int note, int velocity, Region::Trigger trigger = Region::attack) noexcept;
   int getNumRegions() const noexcept { return regions_.size(); }
+  // juce::Array::operator[] is range-safe (returns a default-constructed value,
+  // i.e. nullptr here, when out of range) and does not throw.
+#pragma warning(suppress : 26447)
   Region* regionAt(int index) noexcept { return regions_[index]; }
 
   // Parent access (for sample data - borrowed pointer)
-  SF2Sound* getParent() { return parent_; }
+  SF2Sound* getParent() noexcept { return parent_; }
 
 private:
   SF2Sound* parent_;                    ///< Borrowed pointer to parent (not owned)

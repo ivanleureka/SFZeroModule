@@ -21,7 +21,7 @@ class SF2Reader
 {
 public:
   SF2Reader(SF2Sound *sound, const juce::File &file);
-  SF2Reader(SF2Sound *sound, std::unique_ptr<juce::InputStream> stream);
+  SF2Reader(SF2Sound *sound, std::unique_ptr<juce::InputStream> stream) noexcept;
   ~SF2Reader() = default;
 
   void read();
@@ -35,7 +35,7 @@ private:
   SF2Sound *sound_;                                ///< Borrowed pointer (not owned)
   std::unique_ptr<juce::InputStream> file_;        ///< Owned file stream
 
-  void addGeneratorToRegion(word genOper, SF2::genAmountType *amount, Region *region);
+  void addGeneratorToRegion(word genOper, const SF2::genAmountType *amount, Region *region);
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SF2Reader)
 };
 }

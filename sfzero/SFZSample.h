@@ -17,11 +17,15 @@ class Sample
 {
 public:
   explicit Sample(const juce::File &fileIn) : file_(fileIn), sampleRate_(0), sampleLength_(0), loopStart_(0), loopEnd_(0) {}
-  explicit Sample(double sampleRateIn) : sampleRate_(sampleRateIn), sampleLength_(0), loopStart_(0), loopEnd_(0) {}
+  explicit Sample(double sampleRateIn) noexcept : sampleRate_(sampleRateIn), sampleLength_(0), loopStart_(0), loopEnd_(0) {}
   ~Sample() = default;
 
   bool load(juce::AudioFormatManager *formatManager);
 
+  // Returns by value; juce::File holds a copy-on-write juce::String whose copy
+  // constructor is noexcept, so this getter is genuinely noexcept (C26447 is a
+  // conservative false positive on the File copy).
+#pragma warning(suppress : 26447)
   juce::File getFile() const noexcept { return (file_); }
   juce::AudioSampleBuffer *getBuffer() const noexcept { return buffer_.get(); }
   std::shared_ptr<juce::AudioSampleBuffer> getBufferShared() const noexcept { return buffer_; }
@@ -31,7 +35,7 @@ public:
   /** Shares ownership of the buffer with the caller. Multiple Samples may share
       the same underlying AudioSampleBuffer (e.g., the SF2 case where one buffer
       backs every Sample). */
-  void setBuffer(std::shared_ptr<juce::AudioSampleBuffer> newBuffer);
+  void setBuffer(std::shared_ptr<juce::AudioSampleBuffer> newBuffer) noexcept;
 
   juce::String dump();
   juce::uint64 getSampleLength() const noexcept { return sampleLength_; }

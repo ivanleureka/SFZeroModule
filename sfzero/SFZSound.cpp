@@ -147,7 +147,7 @@ void sfzero::Sound::loadSamples(juce::AudioFormatManager *formatManager, double 
   for (juce::HashMap<juce::String, sfzero::Sample *>::Iterator i(samplesByPath_); i.next();)
   {
     sfzero::Sample *sample = i.getValue();
-    bool ok = sample->load(formatManager);
+    const bool ok = sample->load(formatManager);
     if (!ok)
     {
       addError("Couldn't load sample \"" + sample->getShortName() + "\"");
@@ -172,7 +172,7 @@ void sfzero::Sound::loadSamples(juce::AudioFormatManager *formatManager, double 
 
 sfzero::Region *sfzero::Sound::getRegionFor(int note, int velocity, sfzero::Region::Trigger trigger)
 {
-  int numRegions = regions_.size();
+  const int numRegions = regions_.size();
 
   for (int i = 0; i < numRegions; ++i)
   {

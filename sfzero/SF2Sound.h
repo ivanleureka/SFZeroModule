@@ -27,6 +27,11 @@ public:
   SF2Sound(const void* data, size_t dataSize);
   virtual ~SF2Sound() override;
 
+  // Rule of five: copy ops are deleted by JUCE_DECLARE_NON_COPYABLE below;
+  // this type owns its presets/samples and must not be moved either.
+  SF2Sound(SF2Sound &&) = delete;
+  SF2Sound &operator=(SF2Sound &&) = delete;
+
   void loadRegions() override;
   void loadSamples(juce::AudioFormatManager *formatManager, double *progressVar = nullptr, juce::Thread *thread = nullptr) override;
 
@@ -37,8 +42,15 @@ public:
     int preset;
     juce::OwnedArray<Region> regions;
 
-    Preset(juce::String nameIn, int bankIn, int presetIn) : name(nameIn), bank(bankIn), preset(presetIn) {}
-    ~Preset() {}
+    Preset(juce::String nameIn, int bankIn, int presetIn) noexcept : name(std::move(nameIn)), bank(bankIn), preset(presetIn) {}
+    ~Preset() = default;
+
+    // Rule of five: owns an OwnedArray<Region> (non-copyable); also non-movable.
+    Preset(const Preset &) = delete;
+    Preset &operator=(const Preset &) = delete;
+    Preset(Preset &&) = delete;
+    Preset &operator=(Preset &&) = delete;
+
     void addRegion(std::unique_ptr<Region> region) { regions.add(region.release()); }
   };
   void addPreset(std::unique_ptr<Preset> preset);
@@ -53,7 +65,10 @@ public:
 
   // Access to presets for instancing (SF2SoundInstance)
   int getNumPresets() const noexcept { return presets_.size(); }
+  // juce::OwnedArray::operator[] is range-safe (returns nullptr if out of range).
+#pragma warning(suppress : 26446)
   Preset* getPreset(int index) noexcept { return presets_[index]; }
+#pragma warning(suppress : 26446)
   const Preset* getPreset(int index) const noexcept { return presets_[index]; }
 
 private:

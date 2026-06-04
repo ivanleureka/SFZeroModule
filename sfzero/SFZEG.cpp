@@ -9,20 +9,20 @@
 #include <cmath>
 #include <limits>
 
-static const float fastReleaseTime = 0.01f;
+static constexpr float fastReleaseTime = 0.01f;
 
 namespace
 {
 // Convert (seconds * sampleRate) into a non-negative int, capped at INT_MAX/2
 // so callers can decrement / divide the result without UB on pathological SF2
 // timecents. Returns 0 for non-positive inputs.
-inline int timeToSamples(double seconds, double sampleRate)
+inline int timeToSamples(double seconds, double sampleRate) noexcept
 {
   if (!(seconds > 0.0) || !(sampleRate > 0.0))
   {
     return 0;
   }
-  double samples = seconds * sampleRate;
+  const double samples = seconds * sampleRate;
   constexpr double kMaxSamples = static_cast<double>(std::numeric_limits<int>::max()) / 2.0;
   if (samples > kMaxSamples)
   {
@@ -32,12 +32,12 @@ inline int timeToSamples(double seconds, double sampleRate)
 }
 }
 
-sfzero::EG::EG()
+sfzero::EG::EG() noexcept
     : segment_(), sampleRate_(0), exponentialDecay_(false), level_(0), slope_(0), samplesUntilNextSegment_(0), segmentIsExponential_(false)
 {
 }
 
-void sfzero::EG::setExponentialDecay(bool newExponentialDecay) { exponentialDecay_ = newExponentialDecay; }
+void sfzero::EG::setExponentialDecay(bool newExponentialDecay) noexcept { exponentialDecay_ = newExponentialDecay; }
 
 void sfzero::EG::startNote(const EGParameters *newParameters, float floatVelocity, double newSampleRate,
                            const EGParameters *velMod)
@@ -169,7 +169,7 @@ void sfzero::EG::startDecay()
     if (exponentialDecay_)
     {
       // I don't truly understand this; just following what LinuxSampler does.
-      float mysterySlope = -9.226f / samplesUntilNextSegment_;
+      const float mysterySlope = -9.226f / samplesUntilNextSegment_;
       slope_ = exp(mysterySlope);
       segmentIsExponential_ = true;
       if (parameters_.sustain > 0.0)
@@ -182,9 +182,9 @@ void sfzero::EG::startDecay()
         // Clamp inputs so log() can't produce NaN/-Inf when level_ is at or
         // near zero or sustain is pathological.
         constexpr double kEpsilon = 1.0e-6;
-        double numerator = std::max(parameters_.sustain / 100.0, kEpsilon);
-        double denominator = std::max(static_cast<double>(level_), kEpsilon);
-        double samplesD = std::log(numerator / denominator) / mysterySlope;
+        const double numerator = std::max(parameters_.sustain / 100.0, kEpsilon);
+        const double denominator = std::max(static_cast<double>(level_), kEpsilon);
+        const double samplesD = std::log(numerator / denominator) / mysterySlope;
         if (!std::isfinite(samplesD) || samplesD <= 0.0)
         {
           startSustain();
@@ -239,7 +239,7 @@ void sfzero::EG::startRelease()
   if (exponentialDecay_)
   {
     // I don't truly understand this; just following what LinuxSampler does.
-    float mysterySlope = -9.226f / samplesUntilNextSegment_;
+    const float mysterySlope = -9.226f / samplesUntilNextSegment_;
     slope_ = exp(mysterySlope);
     segmentIsExponential_ = true;
   }

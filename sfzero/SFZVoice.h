@@ -17,8 +17,13 @@ struct Region;
 class Voice : public juce::SynthesiserVoice
 {
 public:
-  Voice();
+  Voice() noexcept;
   virtual ~Voice() override;
+
+  // Rule of five: copy ops deleted by JUCE_DECLARE_NON_COPYABLE below; delete
+  // move ops too (C26432) without re-declaring copy.
+  Voice(Voice &&) = delete;
+  Voice &operator=(Voice &&) = delete;
 
   bool canPlaySound(juce::SynthesiserSound *sound) override;
   void startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound *sound, int currentPitchWheelPosition) override;
@@ -35,7 +40,7 @@ public:
   juce::uint64 getOffBy() const noexcept;
 
   // Set the region to be used by the next startNote().
-  void setRegion(Region *nextRegion);
+  void setRegion(Region *nextRegion) noexcept;
 
   juce::String infoString();
 
@@ -80,7 +85,7 @@ private:
 
   void calcPitchRatio();
   void killNote();
-  double fractionalMidiNoteInHz(double note, double freqOfA = 440.0);
+  double fractionalMidiNoteInHz(double note, double freqOfA = 440.0) noexcept;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Voice)
 };

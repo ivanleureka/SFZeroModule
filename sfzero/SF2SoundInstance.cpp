@@ -17,7 +17,10 @@ sfzero::SF2SoundInstance::SF2SoundInstance(SF2Sound* parent)
 
 sfzero::SF2SoundInstance::~SF2SoundInstance()
 {
-  // We don't own the regions or parent - just clear our pointer array
+  // We don't own the regions or parent - just clear our pointer array.
+  // juce::Array::clear() only frees storage and cannot throw, so it is safe in
+  // this implicitly-noexcept destructor.
+#pragma warning(suppress : 26447)
   regions_.clear();
 }
 
@@ -53,7 +56,7 @@ void sfzero::SF2SoundInstance::useSubsound(int whichSubsound)
     return;
   }
 
-  int numPresets = parent_->getNumPresets();
+  const int numPresets = parent_->getNumPresets();
   if (whichSubsound < 0 || whichSubsound >= numPresets)
   {
     jassertfalse;  // Invalid subsound index
@@ -76,7 +79,7 @@ void sfzero::SF2SoundInstance::useSubsound(int whichSubsound)
   }
 }
 
-sfzero::Region* sfzero::SF2SoundInstance::getRegionFor(int note, int velocity, Region::Trigger trigger)
+sfzero::Region* sfzero::SF2SoundInstance::getRegionFor(int note, int velocity, Region::Trigger trigger) noexcept
 {
   jassert(parent_ != nullptr);
   for (auto* region : regions_)

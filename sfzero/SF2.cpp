@@ -6,13 +6,19 @@
  *************************************************************************************/
 #include "SF2.h"
 #include "RIFF.h"
+#include "SFZSafeCast.h"
+#include <span>
 
 #define readAbyte(name, file) name = (byte)file->readByte();
 #define readAchar(name, file) name = file->readByte();
 #define readAdword(name, file) name = (dword)file->readInt();
 #define readAword(name, file) name = (word)file->readShort();
 #define readAshort(name, file) name = file->readShort();
-#define readAchar20(name, file) file->read(name, 20);
+#define readAchar20(name, file)                                                                                                  \
+  {                                                                                                                              \
+    const std::span<char> name##Bytes{name};                                                                                    \
+    file->read(name##Bytes.data(), sfzero::narrowCast<int>(name##Bytes.size()));                                                \
+  }
 #define readAgenAmountType(name, file) name.shortAmount = file->readShort();
 
 #define SF2Field(type, name) readA##type(name, file)
@@ -69,7 +75,7 @@ void sfzero::SF2::shdr::readFrom(juce::InputStream *file)
 
 void sfzero::SF2::Hydra::readFrom(juce::InputStream *file, juce::int64 pdtaChunkEnd)
 {
-  int i, numItems;
+  int numItems = 0;
 
 #define HandleChunk(chunkName)                                                                                                   \
   if (FourCCEquals(chunk.id, #chunkName))                                                                                        \
@@ -77,9 +83,10 @@ void sfzero::SF2::Hydra::readFrom(juce::InputStream *file, juce::int64 pdtaChunk
     numItems = int (chunk.size / SF2::chunkName::sizeInFile);                                                                    \
     chunkName##NumItems = numItems;                                                                                              \
     chunkName##Items = std::make_unique<SF2::chunkName[]>(numItems);                                                             \
-    for (i = 0; i < numItems; ++i)                                                                                               \
+    const std::span<SF2::chunkName> items{chunkName##Items.get(), sfzero::narrowCast<size_t>(numItems)};                        \
+    for (auto &item : items)                                                                                                     \
     {                                                                                                                            \
-      chunkName##Items[i].readFrom(file);                                                                                        \
+      item.readFrom(file);                                                                                                       \
     }                                                                                                                            \
   }                                                                                                                              \
   else
@@ -97,7 +104,7 @@ void sfzero::SF2::Hydra::readFrom(juce::InputStream *file, juce::int64 pdtaChunk
   }
 }
 
-bool sfzero::SF2::Hydra::isComplete()
+bool sfzero::SF2::Hydra::isComplete() noexcept
 {
   return phdrItems && pbagItems && pmodItems && pgenItems && instItems && ibagItems && imodItems && igenItems && shdrItems;
 }

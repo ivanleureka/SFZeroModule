@@ -7,15 +7,16 @@
 #include "SFZReader.h"
 #include "SFZRegion.h"
 #include "SFZSound.h"
+#include <array>
 
-sfzero::Reader::Reader(sfzero::Sound *soundIn) : sound_(soundIn), line_(1) {}
+sfzero::Reader::Reader(sfzero::Sound *soundIn) noexcept : sound_(soundIn), line_(1) {}
 
-sfzero::Reader::~Reader() {}
+sfzero::Reader::~Reader() = default;
 
 void sfzero::Reader::read(const juce::File &file)
 {
   juce::MemoryBlock contents;
-  bool ok = file.loadFileAsData(contents);
+  const bool ok = file.loadFileAsData(contents);
 
   if (!ok)
   {
@@ -23,11 +24,17 @@ void sfzero::Reader::read(const juce::File &file)
     return;
   }
 
-  read(static_cast<const char *>(contents.getData()), static_cast<int>(contents.getSize()));
+  read(static_cast<const char *>(contents.getData()), narrowCast<unsigned int>(contents.getSize()));
 }
 
 void sfzero::Reader::read(const char *text, unsigned int length)
 {
+  // Pointer-cursor lexer over the caller-owned text buffer. All pointer
+  // arithmetic (C26481) is intrinsic to the scanner and guarded by `p < end`
+  // checks throughout; suppressed for the whole function rather than rewritten
+  // to span indexing (which would not preserve the cursor semantics).
+#pragma warning(push)
+#pragma warning(disable : 26481)
   const char *p = text;
   const char *end = text + length;
   char c = 0;
@@ -275,7 +282,7 @@ void sfzero::Reader::read(const char *text, unsigned int length)
             }
             else if (opcode == "group")
             {
-              buildingRegion->group = static_cast<int>(value.getLargeIntValue());
+              buildingRegion->group = narrowCast<int>(value.getLargeIntValue());
             }
             else if (opcode == "off_by")
             {
@@ -287,7 +294,7 @@ void sfzero::Reader::read(const char *text, unsigned int length)
             }
             else if (opcode == "end")
             {
-              juce::int64 end2 = value.getLargeIntValue();
+              const juce::int64 end2 = value.getLargeIntValue();
               if (end2 < 0)
               {
                 buildingRegion->negative_end = true;
@@ -299,7 +306,7 @@ void sfzero::Reader::read(const char *text, unsigned int length)
             }
             else if (opcode == "loop_mode")
             {
-              bool modeIsSupported = value == "no_loop" || value == "one_shot" || value == "loop_continuous";
+              const bool modeIsSupported = value == "no_loop" || value == "one_shot" || value == "loop_continuous";
               if (modeIsSupported)
               {
                 buildingRegion->loop_mode = static_cast<sfzero::Region::LoopMode>(loopModeValue(value));
@@ -438,12 +445,18 @@ void sfzero::Reader::read(const char *text, unsigned int length)
   }
 
   finishPendingRegion();
+#pragma warning(pop)
 }
 
-const char *sfzero::Reader::handleLineEnd(const char *p)
+const char *sfzero::Reader::handleLineEnd(const char *p) noexcept
 {
+  // Pointer-cursor lexing over the caller-owned text buffer: the pointer
+  // arithmetic (C26481) is intrinsic to the scanner and bounds-checked by the
+  // caller's `p < end` loop guards, so it is suppressed for this function.
+#pragma warning(push)
+#pragma warning(disable : 26481)
   // Check for DOS-style line ending.
-  char lineEndChar = *p++;
+  const char lineEndChar = *p++;
 
   if ((lineEndChar == '\r') && (*p == '\n'))
   {
@@ -451,10 +464,15 @@ const char *sfzero::Reader::handleLineEnd(const char *p)
   }
   line_ += 1;
   return p;
+#pragma warning(pop)
 }
 
 const char *sfzero::Reader::readPathInto(juce::String *pathOut, const char *pIn, const char *endIn)
 {
+  // Pointer-cursor scan; C26481 pointer arithmetic is intrinsic and guarded by
+  // `p < end`. Suppressed for the whole function (see read() for rationale).
+#pragma warning(push)
+#pragma warning(disable : 26481)
   // Paths are kind of funny to parse because they can contain whitespace.
   const char *p = pIn;
   const char *end = endIn;
@@ -463,7 +481,7 @@ const char *sfzero::Reader::readPathInto(juce::String *pathOut, const char *pIn,
 
   while (p < end)
   {
-    char c = *p;
+    const char c = *p;
     if (c == ' ')
     {
       // Is this space part of the path?  Or the start of the next opcode?  We
@@ -494,8 +512,8 @@ const char *sfzero::Reader::readPathInto(juce::String *pathOut, const char *pIn,
     // Can't do this:
     //      juce::String path(CharPointer_UTF8(pathStart), CharPointer_UTF8(p));
     // It won't compile for some unfathomable reason.
-    juce::CharPointer_UTF8 end2(p);
-    juce::String path(juce::CharPointer_UTF8(pathStart), end2);
+    const juce::CharPointer_UTF8 end2(p);
+    const juce::String path(juce::CharPointer_UTF8(pathStart), end2);
     *pathOut = path;
   }
   else
@@ -503,12 +521,18 @@ const char *sfzero::Reader::readPathInto(juce::String *pathOut, const char *pIn,
     *pathOut = {};
   }
   return p;
+#pragma warning(pop)
 }
 
 int sfzero::Reader::keyValue(const juce::String &str)
 {
-  auto chars = str.toRawUTF8();
+  // chars points at the String's NUL-terminated UTF-8 bytes; we only read the
+  // first two, which are guaranteed present (the second is at worst the NUL).
+  // Fixed small-offset reads on a NUL-terminated C string (C26481) are an
+  // idiom that does not map onto span without changing behaviour.
+  const char *const chars = str.toRawUTF8();
 
+#pragma warning(suppress : 26481)
   char c = chars[0];
 
   if ((c >= '0') && (c <= '9'))
@@ -517,19 +541,20 @@ int sfzero::Reader::keyValue(const juce::String &str)
   }
 
   int note = 0;
-  static const int notes[] = {
+  static constexpr std::array<int, 7> notes = {
       12 + 0, 12 + 2, 3, 5, 7, 8, 10,
   };
   if ((c >= 'A') && (c <= 'G'))
   {
-    note = notes[c - 'A'];
+    note = notes.at(narrowCast<size_t>(c - 'A'));
   }
   else if ((c >= 'a') && (c <= 'g'))
   {
-    note = notes[c - 'a'];
+    note = notes.at(narrowCast<size_t>(c - 'a'));
   }
   int octaveStart = 1;
 
+#pragma warning(suppress : 26481)
   c = chars[1];
   if ((c == 'b') || (c == '#'))
   {
@@ -544,13 +569,13 @@ int sfzero::Reader::keyValue(const juce::String &str)
     }
   }
 
-  int octave = str.substring(octaveStart).getIntValue();
+  const int octave = str.substring(octaveStart).getIntValue();
   // A3 == 57.
-  int result = octave * 12 + note + (57 - 4 * 12);
+  const int result = octave * 12 + note + (57 - 4 * 12);
   return result;
 }
 
-int sfzero::Reader::triggerValue(const juce::String &str)
+int sfzero::Reader::triggerValue(const juce::String &str) noexcept
 {
   if (str == "release")
   {
@@ -567,7 +592,7 @@ int sfzero::Reader::triggerValue(const juce::String &str)
   return sfzero::Region::attack;
 }
 
-int sfzero::Reader::loopModeValue(const juce::String &str)
+int sfzero::Reader::loopModeValue(const juce::String &str) noexcept
 {
   if (str == "no_loop")
   {
