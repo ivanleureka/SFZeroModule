@@ -32,8 +32,7 @@ sfzero::Voice::~Voice() = default;
 bool sfzero::Voice::canPlaySound(juce::SynthesiserSound *sound)
 {
   // Support both regular Sound and SF2SoundInstance
-  return dynamic_cast<sfzero::Sound *>(sound) != nullptr
-      || dynamic_cast<sfzero::SF2SoundInstance *>(sound) != nullptr;
+  return dynamic_cast<sfzero::Sound *>(sound) != nullptr || dynamic_cast<sfzero::SF2SoundInstance *>(sound) != nullptr;
 }
 
 void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::SynthesiserSound *soundIn,
@@ -125,7 +124,8 @@ void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::Syn
     vibPhaseInc_ = twoPi * vibFreqHz / static_cast<float>(sr);
     const float delaySecs = sfzero::Region::timecents2Secs(static_cast<int>(region_->delayVibLFO));
     vibDelaySamples_ = static_cast<int>(delaySecs * sr);
-    if (vibDelaySamples_ < 0) vibDelaySamples_ = 0;
+    if (vibDelaySamples_ < 0)
+      vibDelaySamples_ = 0;
   }
 
   // Phase C - initial filter LPF. Skip the filter entirely when the region's
@@ -139,13 +139,17 @@ void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::Syn
     // Clamp to [30 Hz, 0.45 * sampleRate] to keep the biquad well-behaved near
     // Nyquist and at sub-audible cutoffs.
     const float maxHz = static_cast<float>(0.45 * sr);
-    if (cutoffHz < 30.0f) cutoffHz = 30.0f;
-    if (cutoffHz > maxHz) cutoffHz = maxHz;
+    if (cutoffHz < 30.0f)
+      cutoffHz = 30.0f;
+    if (cutoffHz > maxHz)
+      cutoffHz = maxHz;
     // SF2 initialFilterQ is centibels of resonance gain. Convert to a usable Q
     // value with a 0.7071 baseline; clamp to a sane range.
     float qLinear = 0.7071068f * sfzero::Region::centibelsToLinear(region_->initialFilterQ);
-    if (qLinear < 0.5f) qLinear = 0.5f;
-    if (qLinear > 8.0f) qLinear = 8.0f;
+    if (qLinear < 0.5f)
+      qLinear = 0.5f;
+    if (qLinear > 8.0f)
+      qLinear = 8.0f;
     currentCutoffHz_ = cutoffHz;
     currentQ_ = qLinear;
     auto coeffs = juce::IIRCoefficients::makeLowPass(sr, cutoffHz, qLinear);
@@ -255,7 +259,7 @@ void sfzero::Voice::pitchWheelMoved(int newValue)
   calcPitchRatio();
 }
 
-void sfzero::Voice::controllerMoved(int /*controllerNumber*/, int /*newValue*/) { /***/}
+void sfzero::Voice::controllerMoved(int /*controllerNumber*/, int /*newValue*/) { /***/ }
 void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int startSample, int numSamples)
 {
   if (region_ == nullptr)
@@ -281,6 +285,10 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
   const float loopStart = static_cast<float>(this->loopStart_);
   const float loopEnd = static_cast<float>(this->loopEnd_);
   const float sampleEnd = static_cast<float>(this->sampleEnd_);
+  // Double-precision loop bounds for the wrap; the float caches above lose
+  // integer precision past 2^24 samples (large SF2 sample pools).
+  const double loopEndExclusive = static_cast<double>(this->loopEnd_) + 1.0;
+  const double loopLength = loopEndExclusive - static_cast<double>(this->loopStart_);
 
   // Phase C - mod-env / vibrato state cached the same way ampeg is.
   // effectivePitchRatio is the pitch ratio after envelope/LFO modulation; we
@@ -374,11 +382,19 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
     }
 
     // Next sample.
+    // loopEnd is inclusive (SF2Reader stores endLoop - 1), so the span
+    // [loopEnd, loopEnd + 1) interpolates loopEnd -> loopStart via nextPos
+    // above. Wrap by the loop length and keep the fractional overshoot:
+    // snapping to loopStart shortened each pass by a varying sub-sample amount,
+    // adding a per-cycle phase jump heard as flutter on short sustain loops.
     sourceSamplePosition += effectivePitchRatio;
-    if ((loopStart < loopEnd) && (sourceSamplePosition > loopEnd))
+    if ((loopStart < loopEnd) && (sourceSamplePosition >= loopEndExclusive))
     {
-      sourceSamplePosition = loopStart;
-      numLoops_ += 1;
+      do
+      {
+        sourceSamplePosition -= loopLength;
+        numLoops_ += 1;
+      } while (sourceSamplePosition >= loopEndExclusive);
     }
 
     // Update EG.
@@ -428,8 +444,10 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
     if (vibInUse_)
     {
       vibPhase += vibPhaseInc;
-      if (vibPhase > twoPi) vibPhase -= twoPi;
-      if (vibDelaySamples > 0) --vibDelaySamples;
+      if (vibPhase > twoPi)
+        vibPhase -= twoPi;
+      if (vibDelaySamples > 0)
+        --vibDelaySamples;
     }
 
     if (needsControlRateUpdate && --modUpdateCounter < 0)
@@ -452,12 +470,16 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
       if (modegFilterActive_)
       {
         float fcCents = initialFilterFc + modegLevel * modEnvToFilterFc;
-        if (fcCents < 1500.0f) fcCents = 1500.0f;
-        if (fcCents > 13500.0f) fcCents = 13500.0f;
+        if (fcCents < 1500.0f)
+          fcCents = 1500.0f;
+        if (fcCents > 13500.0f)
+          fcCents = 13500.0f;
         float fcHz = sfzero::Region::absoluteCentsToHz(fcCents);
         const float maxHz = static_cast<float>(0.45 * sampleRate);
-        if (fcHz < 30.0f) fcHz = 30.0f;
-        if (fcHz > maxHz) fcHz = maxHz;
+        if (fcHz < 30.0f)
+          fcHz = 30.0f;
+        if (fcHz > maxHz)
+          fcHz = maxHz;
         if (fcHz != currentCutoffHz_)
         {
           currentCutoffHz_ = fcHz;
