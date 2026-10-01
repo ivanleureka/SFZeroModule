@@ -9,6 +9,7 @@
 #include "SF2SoundInstance.h"
 #include "SFZVoice.h"
 #include "SFZSafeCast.h"
+#include <array>
 
 sfzero::Synth::Synth() noexcept : Synthesiser() {}
 
@@ -39,7 +40,34 @@ void sfzero::Synth::noteOn(int midiChannel, int midiNoteNumber, float velocity)
   // (multi-layered drums in particular), and each can declare a distinct group.
   // We must collect *all* the group IDs from matching regions and silence any
   // voice whose off_by points at any of them - not just the first match.
-  juce::SortedSet<int> groupsTriggered;
+  //
+  // Fixed-capacity set: this runs on the audio thread for every note-on, and
+  // the juce::SortedSet it replaced heap-allocated on the first drum hit of
+  // every block. A note never matches more than a handful of exclusive
+  // classes; anything past the cap is simply not collected.
+  constexpr int kMaxGroups = 16;
+  std::array<int, kMaxGroups> groupsTriggered{};
+  int numGroupsTriggered = 0;
+  auto addGroup = [&groupsTriggered, &numGroupsTriggered](int group) noexcept
+  {
+    for (int g = 0; g < numGroupsTriggered; ++g)
+    {
+      if (groupsTriggered[static_cast<size_t>(g)] == group)
+        return;
+    }
+    if (numGroupsTriggered < kMaxGroups)
+      groupsTriggered[static_cast<size_t>(numGroupsTriggered++)] = group;
+  };
+  auto containsGroup = [&groupsTriggered, &numGroupsTriggered](int group) noexcept
+  {
+    for (int g = 0; g < numGroupsTriggered; ++g)
+    {
+      if (groupsTriggered[static_cast<size_t>(g)] == group)
+        return true;
+    }
+    return false;
+  };
+
   const sfzero::Region::Trigger groupCheckTrigger = sfzero::Region::first;
   if (sound)
   {
@@ -49,7 +77,7 @@ void sfzero::Synth::noteOn(int midiChannel, int midiNoteNumber, float velocity)
       const sfzero::Region *region = sound->regionAt(r);
       if (region && region->matches(midiNoteNumber, midiVelocity, groupCheckTrigger) && region->group != 0)
       {
-        groupsTriggered.add(region->group);
+        addGroup(region->group);
       }
     }
   }
@@ -61,12 +89,12 @@ void sfzero::Synth::noteOn(int midiChannel, int midiNoteNumber, float velocity)
       const sfzero::Region *region = soundInstance->regionAt(r);
       if (region && region->matches(midiNoteNumber, midiVelocity, groupCheckTrigger) && region->group != 0)
       {
-        groupsTriggered.add(region->group);
+        addGroup(region->group);
       }
     }
   }
 
-  if (!groupsTriggered.isEmpty())
+  if (numGroupsTriggered > 0)
   {
     for (i = voices.size(); --i >= 0;)
     {
@@ -76,7 +104,7 @@ void sfzero::Synth::noteOn(int midiChannel, int midiNoteNumber, float velocity)
         continue;
       }
       const int voiceOffBy = narrowCast<int>(voice->getOffBy());
-      if (voiceOffBy != 0 && groupsTriggered.contains(voiceOffBy))
+      if (voiceOffBy != 0 && containsGroup(voiceOffBy))
       {
         voice->stopNoteForGroup();
       }
@@ -226,8 +254,14 @@ int sfzero::Synth::numVoicesUsed() noexcept
 
   for (int i = voices.size(); --i >= 0;)
   {
-    if (voices.getUnchecked(i)->getCurrentlyPlayingNote() >= 0)
+    auto *voice = voices.getUnchecked(i);
+    if (voice->getCurrentlyPlayingNote() >= 0)
     {
+      numUsed += 1;
+    }
+    else if (auto *sfzVoice = dynamic_cast<sfzero::Voice *>(voice); sfzVoice != nullptr && sfzVoice->hasPendingDeclick())
+    {
+      // A hard-stopped voice is still emitting its short declick tail.
       numUsed += 1;
     }
   }

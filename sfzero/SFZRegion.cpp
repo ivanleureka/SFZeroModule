@@ -97,6 +97,16 @@ void sfzero::Region::addForSF2(const sfzero::Region *other) noexcept
   delayVibLFO += other->delayVibLFO;
   freqVibLFO += other->freqVibLFO;
   vibLfoToPitch += other->vibLfoToPitch;
+  keynumToVolEnvHold += other->keynumToVolEnvHold;
+  keynumToVolEnvDecay += other->keynumToVolEnvDecay;
+  keynumToModEnvHold += other->keynumToModEnvHold;
+  keynumToModEnvDecay += other->keynumToModEnvDecay;
+}
+
+namespace
+{
+// Envelope stages shorter than this are treated as "off" (0 s). See sf2ToSFZ().
+constexpr float kMinEnvelopeSecs = 0.0005f;
 }
 
 void sfzero::Region::sf2ToSFZ()
@@ -113,21 +123,26 @@ void sfzero::Region::sf2ToSFZ()
   ampeg.sustain = 100.0f * juce::Decibels::decibelsToGain(-ampeg.sustain / 10.0f);
   ampeg.release = timecents2Secs(static_cast<int>(ampeg.release));
 
-  // Pin very short EG segments.  Timecents don't get to zero, and our EG is
-  // happier with zero values.
-  if (ampeg.delay < 0.01f)
+  // Pin very short EG segments.  Timecents don't get to zero (the SF2 "off"
+  // value of -12000 tc is ~1 ms), and our EG is happier with zero values.
+  // The pin threshold is 0.5 ms: banks routinely use 1-9 ms attacks/decays to
+  // de-click sharp sample starts, and pinning those to 0 (the old 10 ms
+  // threshold) turned them into instant steps. Release keeps the 10 ms pin
+  // because EG::startRelease() floors a zero release at 10 ms anyway (a
+  // sub-10 ms release is itself a click).
+  if (ampeg.delay < kMinEnvelopeSecs)
   {
     ampeg.delay = 0.0f;
   }
-  if (ampeg.attack < 0.01f)
+  if (ampeg.attack < kMinEnvelopeSecs)
   {
     ampeg.attack = 0.0f;
   }
-  if (ampeg.hold < 0.01f)
+  if (ampeg.hold < kMinEnvelopeSecs)
   {
     ampeg.hold = 0.0f;
   }
-  if (ampeg.decay < 0.01f)
+  if (ampeg.decay < kMinEnvelopeSecs)
   {
     ampeg.decay = 0.0f;
   }
@@ -159,10 +174,10 @@ void sfzero::Region::sf2ToSFZ()
   modeg.sustain = 100.0f - (modeg.sustain / 10.0f);
   modeg.release = timecents2Secs(static_cast<int>(modeg.release));
 
-  if (modeg.delay < 0.01f) modeg.delay = 0.0f;
-  if (modeg.attack < 0.01f) modeg.attack = 0.0f;
-  if (modeg.hold < 0.01f) modeg.hold = 0.0f;
-  if (modeg.decay < 0.01f) modeg.decay = 0.0f;
+  if (modeg.delay < kMinEnvelopeSecs) modeg.delay = 0.0f;
+  if (modeg.attack < kMinEnvelopeSecs) modeg.attack = 0.0f;
+  if (modeg.hold < kMinEnvelopeSecs) modeg.hold = 0.0f;
+  if (modeg.decay < kMinEnvelopeSecs) modeg.decay = 0.0f;
   if (modeg.release < 0.01f) modeg.release = 0.0f;
 }
 

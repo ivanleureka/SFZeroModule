@@ -15,6 +15,7 @@ namespace sfzero
 
 class SF2Sound;
 class Sample;
+class SampleBuffer;
 struct Region;
 
 class SF2Reader
@@ -29,7 +30,7 @@ public:
   /** Read sample data from the SF2 file.
       @return Shared ownership of the returned buffer; every Sample created from
               this read shares the same buffer until the last Sample releases it. */
-  std::shared_ptr<juce::AudioSampleBuffer> readSamples(double *progressVar = nullptr, juce::Thread *thread = nullptr);
+  std::shared_ptr<SampleBuffer> readSamples(double *progressVar = nullptr, juce::Thread *thread = nullptr);
 
 private:
   SF2Sound *sound_;                                ///< Borrowed pointer (not owned)

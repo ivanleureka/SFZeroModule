@@ -31,7 +31,7 @@ sfzero::SF2Sound::~SF2Sound()
 #pragma warning(suppress : 26447)
   getRegions().clear();
   // Sample objects are owned by samplesStorage_ (auto-deleted after this body).
-  // The shared AudioSampleBuffer is held by std::shared_ptr inside each Sample,
+  // The shared 16-bit SampleBuffer is held by std::shared_ptr inside each Sample,
   // so it disappears once the last Sample is destroyed — no manual delete needed.
 }
 
@@ -79,7 +79,7 @@ void sfzero::SF2Sound::loadRegions()
 
 void sfzero::SF2Sound::loadSamples(juce::AudioFormatManager * /*formatManager*/, double *progressVar, juce::Thread *thread)
 {
-  std::shared_ptr<juce::AudioSampleBuffer> buffer;
+  std::shared_ptr<sfzero::SampleBuffer> buffer;
 
   // Create reader either from memory or file
   if (memoryStream_)
@@ -159,7 +159,7 @@ sfzero::Sample *sfzero::SF2Sound::sampleFor(double sampleRate)
   return sample;
 }
 
-void sfzero::SF2Sound::setSamplesBuffer(std::shared_ptr<juce::AudioSampleBuffer> buffer)
+void sfzero::SF2Sound::setSamplesBuffer(std::shared_ptr<sfzero::SampleBuffer> buffer)
 {
   for (juce::HashMap<int, sfzero::Sample *>::Iterator i(samplesByRate_); i.next();)
   {

@@ -8,8 +8,23 @@ sfzero::SF2SoundInstance::SF2SoundInstance(SF2Sound* parent)
 {
   jassert(parent_ != nullptr);
 
+  // Reserve room for the largest preset up front: useSubsound() is reachable
+  // from the audio thread (MIDI program change inside processBlock), and
+  // juce::Array::add() must not have to grow there.
+  if (parent_ != nullptr)
+  {
+    int maxRegions = 0;
+    const int numPresets = parent_->getNumPresets();
+    for (int p = 0; p < numPresets; ++p)
+    {
+      if (const auto *preset = parent_->getPreset(p))
+        maxRegions = juce::jmax(maxRegions, preset->regions.size());
+    }
+    regions_.ensureStorageAllocated(maxRegions);
+  }
+
   // Initialize with first preset
-  if (parent_->getNumPresets() > 0)
+  if (parent_ != nullptr && parent_->getNumPresets() > 0)
   {
     useSubsound(0);
   }
@@ -65,8 +80,9 @@ void sfzero::SF2SoundInstance::useSubsound(int whichSubsound)
 
   selectedPreset_ = whichSubsound;
 
-  // Clear our regions and copy pointers from parent's preset
-  regions_.clear();
+  // Clear our regions and copy pointers from parent's preset. clearQuick()
+  // keeps the storage allocated (audio-thread reachable, see constructor).
+  regions_.clearQuick();
 
   auto* preset = parent_->getPreset(whichSubsound);
   if (preset)

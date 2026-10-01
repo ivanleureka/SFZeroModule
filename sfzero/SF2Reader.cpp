@@ -9,10 +9,17 @@
 #include "SF2.h"
 #include "SF2Generator.h"
 #include "SF2Sound.h"
+#include "SFZSample.h"
 #include "SFZSafeCast.h"
 #include <array>
+#include <cstdint>
 #include <span>
-#include <vector>
+
+namespace
+{
+// initialAttenuation: dB per generator unit. See addGeneratorToRegion().
+constexpr float kAttenuationDbPerUnit = 0.04f;
+}
 
 sfzero::SF2Reader::SF2Reader(sfzero::SF2Sound *soundIn, const juce::File &fileIn)
     : sound_(soundIn)
@@ -208,7 +215,7 @@ void sfzero::SF2Reader::read()
 #pragma warning(pop)
 }
 
-std::shared_ptr<juce::AudioSampleBuffer> sfzero::SF2Reader::readSamples(double *progressVar, juce::Thread *thread)
+std::shared_ptr<sfzero::SampleBuffer> sfzero::SF2Reader::readSamples(double *progressVar, juce::Thread *thread)
 {
 #pragma warning(push)
 #pragma warning(disable : 26446)   // span::operator[] is unchecked; indices are span-bounded (file-load, not real-time)
@@ -262,34 +269,33 @@ std::shared_ptr<juce::AudioSampleBuffer> sfzero::SF2Reader::readSamples(double *
     return nullptr;
   }
 
-  // Allocate the shared sample buffer; every SFZSample built from this SF2 will share it.
+  // Allocate the shared 16-bit sample pool; every SFZSample built from this
+  // SF2 will share it. The smpl chunk is little-endian int16, which is the
+  // in-memory format too, so the data is read straight in - no float
+  // conversion pass and half the RAM of the old float32 pool. (A big-endian
+  // target would need a byte swap here.)
   const int numSamples = narrowCast<int>(chunk.size / sizeof(short));
-  auto sampleBuffer = std::make_shared<juce::AudioSampleBuffer>(1, numSamples);
+  auto sampleBuffer = std::make_shared<sfzero::SampleBuffer>(1, numSamples);
 
-  // Read and convert using RAII buffer. Span views replace raw pointer
-  // arithmetic over the read buffer and the destination channel.
-  std::vector<short> buffer(bufferSize);
-  const std::span<float> outSamples{sampleBuffer->getWritePointer(0), narrowCast<size_t>(numSamples)};
+  const std::span<std::int16_t> outSamples{sampleBuffer->getWritePointer(0), narrowCast<size_t>(numSamples)};
   int samplesLeft = numSamples;
   size_t outIndex = 0;
   while (samplesLeft > 0)
   {
-    // Read the buffer.
+    // Read in chunks so progress / cancellation stay responsive.
     int samplesToRead = bufferSize;
     if (samplesToRead > samplesLeft)
     {
       samplesToRead = samplesLeft;
     }
-    file_->read(buffer.data(), samplesToRead * narrowCast<int>(sizeof(short)));
-
-    // Convert from signed 16-bit to float.
-    const std::span<short> inSamples{buffer.data(), narrowCast<size_t>(samplesToRead)};
-    for (const short sampleValue : inSamples)
+    const int bytesToRead = samplesToRead * narrowCast<int>(sizeof(std::int16_t));
+    const int bytesRead = file_->read(outSamples.subspan(outIndex, narrowCast<size_t>(samplesToRead)).data(), bytesToRead);
+    if (bytesRead < bytesToRead)
     {
-      // If we ever need to compile for big-endian platforms, we'll need to
-      // byte-swap here.
-      outSamples[outIndex++] = sampleValue / 32767.0f;
+      sound_->addError("SF2 sample data is truncated.");
+      return nullptr;
     }
+    outIndex += narrowCast<size_t>(samplesToRead);
 
     samplesLeft -= samplesToRead;
 
@@ -383,9 +389,13 @@ void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, const sfzero:
     break;
 
   case sfzero::SF2Generator::initialAttenuation:
-    // The spec says "initialAttenuation" is in centibels.  But everyone
-    // seems to treat it as millibels.
-    region->volume += -amount->shortAmount / 100.0f;
+    // The spec says "initialAttenuation" is in centibels (0.1 dB). The
+    // original SFZero used 0.01 dB/unit ("everyone treats it as millibels"),
+    // which is 4-10x too weak: GM banks rely on this generator to balance
+    // instruments and velocity layers, and that balance was mostly lost.
+    // FluidSynth - the reference the common banks were balanced against -
+    // applies 0.04 dB/unit (the EMU hardware quirk), so match that.
+    region->volume += -amount->shortAmount * kAttenuationDbPerUnit;
     break;
 
   case sfzero::SF2Generator::endloopAddrsCoarseOffset:
@@ -468,6 +478,20 @@ void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, const sfzero:
     region->vibLfoToPitch = amount->shortAmount;
     break;
 
+  // Key-number envelope scaling (timecents per key, relative to key 60).
+  case sfzero::SF2Generator::keynumToVolEnvHold:
+    region->keynumToVolEnvHold = amount->shortAmount;
+    break;
+  case sfzero::SF2Generator::keynumToVolEnvDecay:
+    region->keynumToVolEnvDecay = amount->shortAmount;
+    break;
+  case sfzero::SF2Generator::keynumToModEnvHold:
+    region->keynumToModEnvHold = amount->shortAmount;
+    break;
+  case sfzero::SF2Generator::keynumToModEnvDecay:
+    region->keynumToModEnvDecay = amount->shortAmount;
+    break;
+
   case sfzero::SF2Generator::modLfoToPitch:
   case sfzero::SF2Generator::modLfoToFilterFc:
   case sfzero::SF2Generator::modLfoToVolume:
@@ -479,10 +503,6 @@ void sfzero::SF2Reader::addGeneratorToRegion(sfzero::word genOper, const sfzero:
   case sfzero::SF2Generator::unused4:
   case sfzero::SF2Generator::delayModLFO:
   case sfzero::SF2Generator::freqModLFO:
-  case sfzero::SF2Generator::keynumToModEnvHold:
-  case sfzero::SF2Generator::keynumToModEnvDecay:
-  case sfzero::SF2Generator::keynumToVolEnvHold:
-  case sfzero::SF2Generator::keynumToVolEnvDecay:
   case sfzero::SF2Generator::instrument:
   // Only allowed in certain places, where we already special-case it.
   case sfzero::SF2Generator::reserved1:

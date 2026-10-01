@@ -11,6 +11,12 @@
 
 static constexpr float fastReleaseTime = 0.01f;
 
+// Exponential decay/release run from full scale to -100 dB over the stage
+// time, per the SF2 spec (ln(1e-5) = -11.513). The LinuxSampler-derived
+// value this replaced (-9.226 = -80 dB) made every decay and release ~25%
+// slower than the bank author intended, and kept voices alive longer.
+static constexpr float kExpDecayLn = -11.5129f;
+
 namespace
 {
 // Convert (seconds * sampleRate) into a non-negative int, capped at INT_MAX/2
@@ -91,7 +97,16 @@ void sfzero::EG::nextSegment()
 
   case Release:
   default:
+    // Park the envelope: the voice's render loop keeps applying slope_ and
+    // reloading samplesUntilNextSegment_ after this call, so leaving the
+    // release slope in place made the (linear) mod envelope drift below zero
+    // for as long as the amp envelope kept the voice alive - heard as the
+    // filter cutoff sagging / pitch drifting through the amp tail.
     segment_ = Done;
+    level_ = 0.0f;
+    slope_ = 0.0f;
+    segmentIsExponential_ = false;
+    samplesUntilNextSegment_ = 0x3FFFFFFF;
     break;
   }
 }
@@ -168,17 +183,17 @@ void sfzero::EG::startDecay()
     level_ = 1.0;
     if (exponentialDecay_)
     {
-      // I don't truly understand this; just following what LinuxSampler does.
-      const float mysterySlope = -9.226f / samplesUntilNextSegment_;
+      // Exponential slope that reaches -100 dB in `decay` seconds.
+      const float mysterySlope = kExpDecayLn / samplesUntilNextSegment_;
       slope_ = exp(mysterySlope);
       segmentIsExponential_ = true;
       if (parameters_.sustain > 0.0)
       {
-        // Again, this is following LinuxSampler's example, which is similar to
-        // SF2-style decay, where "decay" specifies the time it would take to
-        // get to zero, not to the sustain level.  The SFZ spec is not that
+        // SF2-style decay: "decay" specifies the time it would take to get
+        // to zero (-100 dB), not to the sustain level; the segment ends early
+        // when the curve reaches the sustain level. (The SFZ spec is not that
         // specific about what "decay" means, so perhaps it's really supposed
-        // to specify the time to reach the sustain level.
+        // to specify the time to reach the sustain level.)
         // Clamp inputs so log() can't produce NaN/-Inf when level_ is at or
         // near zero or sustain is pathological.
         constexpr double kEpsilon = 1.0e-6;
@@ -238,8 +253,8 @@ void sfzero::EG::startRelease()
   samplesUntilNextSegment_ = timeToSamples(release, sampleRate_);
   if (exponentialDecay_)
   {
-    // I don't truly understand this; just following what LinuxSampler does.
-    const float mysterySlope = -9.226f / samplesUntilNextSegment_;
+    // Exponential slope that reaches -100 dB in `release` seconds.
+    const float mysterySlope = kExpDecayLn / samplesUntilNextSegment_;
     slope_ = exp(mysterySlope);
     segmentIsExponential_ = true;
   }

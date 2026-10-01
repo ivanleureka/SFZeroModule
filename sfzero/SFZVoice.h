@@ -8,11 +8,13 @@
 #define SFZVOICE_H_INCLUDED
 
 #include "SFZEG.h"
+#include <cstdint>
 #include <memory>
 
 namespace sfzero
 {
 struct Region;
+class SampleBuffer;
 
 class Voice : public juce::SynthesiserVoice
 {
@@ -42,6 +44,11 @@ public:
   // Set the region to be used by the next startNote().
   void setRegion(Region *nextRegion) noexcept;
 
+  /** True while a hard stop (killNote: voice steal, all-sound-off, pool
+      reclaim) is still emitting its short declick fade. The voice is
+      otherwise idle (getCurrentlyPlayingNote() < 0). */
+  bool hasPendingDeclick() const noexcept { return declickSamples_ > 0; }
+
   juce::String infoString();
 
 private:
@@ -52,11 +59,11 @@ private:
   float noteGainLeft_, noteGainRight_;
   double sourceSamplePosition_;
   EG ampeg_;
-  juce::int64 sampleEnd_;
+  juce::int64 sampleStart_, sampleEnd_;
   juce::int64 loopStart_, loopEnd_;
-  std::shared_ptr<juce::AudioSampleBuffer> bufferKeepAlive_;
-  const float *inL_;
-  const float *inR_;
+  std::shared_ptr<SampleBuffer> bufferKeepAlive_;
+  const std::int16_t *inL_;
+  const std::int16_t *inR_;
   int bufferNumSamples_;
 
   // Phase C - per-voice low-pass biquad. Bypassed when the region requests no
@@ -79,12 +86,22 @@ private:
   float vibPhaseInc_;
   int vibDelaySamples_;
 
+  // Declick on hard stop. killNote() captures the last output sample and the
+  // next renderNextBlock() calls fade it out over kDeclickSamples instead of
+  // letting the waveform step to zero (the click heard on voice steals).
+  // Stored floats only, so the tail is safe to render after the region /
+  // sample buffer have been released.
+  float lastOutL_, lastOutR_;
+  float declickL_, declickR_;
+  int declickSamples_;
+
   // Info only.
   int numLoops_;
   int curVelocity_;
 
   void calcPitchRatio();
   void killNote();
+  void renderDeclickTail(juce::AudioSampleBuffer &outputBuffer, int startSample, int numSamples) noexcept;
   double fractionalMidiNoteInHz(double note, double freqOfA = 440.0) noexcept;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Voice)

@@ -15,13 +15,34 @@
 
 static constexpr float globalGain = -1.0f;
 
+// Declick fade on hard stop: 64 samples (~1.3 ms at 48 kHz) of 0.9^n decay
+// reaches -60 dB, short enough to hide under the stealing note's attack.
+static constexpr int kDeclickSamples = 64;
+static constexpr float kDeclickDecay = 0.9f;
+static constexpr float kDeclickThreshold = 1.0e-5f;
+
+// 4-point cubic Hermite (Catmull-Rom) interpolation between y1 and y2.
+// Replaces the 2-point linear interpolation: every note is resampled (SF2
+// material is 22/32/44.1 kHz, devices run at 48 kHz), and linear interpolation
+// both dulls the top octave and adds imaging/aliasing products when a sample
+// is pitched up. Hermite keeps the passband flat well past 10 kHz at a cost of
+// ~10 flops per tap - still far cheaper than a proper sinc interpolator.
+static inline float hermite4(float y0, float y1, float y2, float y3, float t) noexcept
+{
+  const float c1 = 0.5f * (y2 - y0);
+  const float c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+  const float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+  return ((c3 * t + c2) * t + c1) * t + y1;
+}
+
 sfzero::Voice::Voice() noexcept
     : region_(nullptr), trigger_(0), curMidiNote_(0), curPitchWheel_(0), pitchRatio_(0), noteGainLeft_(0), noteGainRight_(0),
-      sourceSamplePosition_(0), sampleEnd_(0), loopStart_(0), loopEnd_(0),
+      sourceSamplePosition_(0), sampleStart_(0), sampleEnd_(0), loopStart_(0), loopEnd_(0),
       bufferKeepAlive_(), inL_(nullptr), inR_(nullptr), bufferNumSamples_(0),
       currentCutoffHz_(20000.0f), currentQ_(0.7071068f), bypassFilter_(true),
       modegInUse_(false), modegFilterActive_(false), modegPitchActive_(false),
       vibInUse_(false), vibPhase_(0.0f), vibPhaseInc_(0.0f), vibDelaySamples_(0),
+      lastOutL_(0.0f), lastOutR_(0.0f), declickL_(0.0f), declickR_(0.0f), declickSamples_(0),
       numLoops_(0), curVelocity_(0)
 {
   ampeg_.setExponentialDecay(true);
@@ -62,7 +83,7 @@ void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::Syn
     else
       region_ = soundInstance->getRegionFor(midiNoteNumber, velocity);
   }
-  if ((region_ == nullptr) || (region_->sample == nullptr) || (region_->sample->getBuffer() == nullptr))
+  if ((region_ == nullptr) || (region_->sample == nullptr) || (region_->sample->getSampleData() == nullptr))
   {
     killNote();
     return;
@@ -75,9 +96,9 @@ void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::Syn
 
   // Hold a shared_ptr to the buffer for the note's lifetime so an in-flight
   // tail-off survives an SF2Sound swap (e.g. unloadSoundFont while voices play).
-  bufferKeepAlive_ = region_->sample->getBufferShared();
-  inL_ = bufferKeepAlive_->getReadPointer(0, 0);
-  inR_ = bufferKeepAlive_->getNumChannels() > 1 ? bufferKeepAlive_->getReadPointer(1, 0) : nullptr;
+  bufferKeepAlive_ = region_->sample->getSampleDataShared();
+  inL_ = bufferKeepAlive_->getReadPointer(0);
+  inR_ = bufferKeepAlive_->getNumChannels() > 1 ? bufferKeepAlive_->getReadPointer(1) : nullptr;
   bufferNumSamples_ = bufferKeepAlive_->getNumSamples();
   jassert(region_->offset >= 0 && static_cast<int>(region_->offset) < bufferNumSamples_);
 
@@ -97,10 +118,35 @@ void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::Syn
   double velocityGainDB = -20.0 * log10((127.0 * 127.0) / (velocityD * velocityD));
   velocityGainDB *= region_->amp_veltrack / 100.0;
   noteGainDB += velocityGainDB;
-  noteGainLeft_ = noteGainRight_ = static_cast<float>(juce::Decibels::decibelsToGain(noteGainDB));
-  // Region pan from SF2/SFZ is intentionally ignored - pan is sourced from MIDI
-  // CC10 at the channel-mix stage in SFZeroAudioProcessor::processBlock.
-  ampeg_.startNote(&region_->ampeg, floatVelocity, getSampleRate(), &region_->ampeg_veltrack);
+  const float baseGain = static_cast<float>(juce::Decibels::decibelsToGain(noteGainDB));
+
+  // Region pan: -100 = hard left .. +100 = hard right (SFZ convention; the SF2
+  // reader converts the pan generator's 0.1% units). SF2 banks lean on this
+  // heavily - every stereo-sampled instrument is a hard-L/hard-R zone pair, and
+  // many mono zones are positioned in the stereo field - so ignoring it
+  // collapses the whole image to centre (and sums each pair +6 dB hot).
+  // Equal-power law, normalised so a centred zone keeps unity gain (the level
+  // mono GM patches always had); a hard-panned zone lands at +3 dB on its side
+  // and silence on the other. The channel's CC10 pan is layered on top at the
+  // mix stage in SFZeroAudioProcessor::processBlock.
+  const float panNorm = juce::jlimit(-1.0f, 1.0f, region_->pan / 100.0f);
+  const float panAngle = (panNorm + 1.0f) * 0.25f * juce::MathConstants<float>::pi;
+  constexpr float kCentreUnity = 1.41421356f; // 1 / cos(pi/4)
+  noteGainLeft_ = baseGain * std::cos(panAngle) * kCentreUnity;
+  noteGainRight_ = baseGain * std::sin(panAngle) * kCentreUnity;
+
+  // SF2 key-number envelope scaling: hold/decay *= 2^((60 - key) * tc/1200).
+  // Copy the parameters so the per-note scaling never touches the shared
+  // region (regions are read concurrently by every channel synth).
+  const double keyOffset = static_cast<double>(60 - midiNoteNumber) / 1200.0;
+  auto scaleByKey = [keyOffset](float stageSecs, float timecentsPerKey) noexcept
+  {
+    return timecentsPerKey != 0.0f ? static_cast<float>(stageSecs * std::pow(2.0, keyOffset * timecentsPerKey)) : stageSecs;
+  };
+  EGParameters ampegParams = region_->ampeg;
+  ampegParams.hold = scaleByKey(ampegParams.hold, region_->keynumToVolEnvHold);
+  ampegParams.decay = scaleByKey(ampegParams.decay, region_->keynumToVolEnvDecay);
+  ampeg_.startNote(&ampegParams, floatVelocity, getSampleRate(), &region_->ampeg_veltrack);
 
   // Phase C - mod envelope (drives filter cutoff and/or pitch).
   modegPitchActive_ = (region_->modEnvToPitch != 0.0f);
@@ -108,7 +154,10 @@ void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::Syn
   modegInUse_ = modegPitchActive_ || modegFilterActive_;
   if (modegInUse_)
   {
-    modeg_.startNote(&region_->modeg, floatVelocity, getSampleRate());
+    EGParameters modegParams = region_->modeg;
+    modegParams.hold = scaleByKey(modegParams.hold, region_->keynumToModEnvHold);
+    modegParams.decay = scaleByKey(modegParams.decay, region_->keynumToModEnvDecay);
+    modeg_.startNote(&modegParams, floatVelocity, getSampleRate());
   }
 
   // Phase C - vibrato LFO (sine, with delayed onset). The LFO is silent until
@@ -161,6 +210,7 @@ void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::Syn
 
   // Offset/end.
   sourceSamplePosition_ = static_cast<double>(region_->offset);
+  sampleStart_ = region_->offset;
   sampleEnd_ = region_->sample->getSampleLength();
   if ((region_->end > 0) && (region_->end < sampleEnd_))
   {
@@ -260,33 +310,86 @@ void sfzero::Voice::pitchWheelMoved(int newValue)
 }
 
 void sfzero::Voice::controllerMoved(int /*controllerNumber*/, int /*newValue*/) { /***/ }
+
+void sfzero::Voice::renderDeclickTail(juce::AudioSampleBuffer &outputBuffer, int startSample, int numSamples) noexcept
+{
+  // Real-time path: bounded pointer arithmetic over the caller's block.
+#pragma warning(push)
+#pragma warning(disable : 26481)
+  float *outL = outputBuffer.getWritePointer(0, startSample);
+  float *outR = outputBuffer.getNumChannels() > 1 ? outputBuffer.getWritePointer(1, startSample) : nullptr;
+  const int n = juce::jmin(numSamples, declickSamples_);
+  float l = declickL_;
+  float r = declickR_;
+  for (int i = 0; i < n; ++i)
+  {
+    l *= kDeclickDecay;
+    r *= kDeclickDecay;
+    if (outR)
+    {
+      outL[i] += l;
+      outR[i] += r;
+    }
+    else
+    {
+      outL[i] += (l + r) * 0.5f;
+    }
+  }
+#pragma warning(pop)
+  declickL_ = l;
+  declickR_ = r;
+  declickSamples_ -= n;
+  if (declickSamples_ <= 0)
+  {
+    declickSamples_ = 0;
+    declickL_ = declickR_ = 0.0f;
+  }
+}
+
 void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int startSample, int numSamples)
 {
+  // JUCE renders every voice each sub-block, so an idle voice still gets to
+  // finish the declick fade of the note it was hard-stopped on. A new note
+  // started on this voice (steal) simply sums with the tail below.
+  if (declickSamples_ > 0)
+  {
+    renderDeclickTail(outputBuffer, startSample, numSamples);
+  }
+
   if (region_ == nullptr)
   {
     return;
   }
 
   // Cached at startNote() — render path does not re-dereference region_->sample.
-  const float *inL = inL_;
-  const float *inR = inR_;
+  const std::int16_t *inL = inL_;
+  const std::int16_t *inR = inR_;
   const int bufferNumSamples = bufferNumSamples_;
+  const int lastIndex = bufferNumSamples - 1;
+  constexpr float kToFloat = sfzero::SampleBuffer::kToFloat;
 
   float *outL = outputBuffer.getWritePointer(0, startSample);
   float *outR = outputBuffer.getNumChannels() > 1 ? outputBuffer.getWritePointer(1, startSample) : nullptr;
 
   // Cache some values, to give them at least some chance of ending up in
-  // registers.
+  // registers. Members read through `this` inside the loop would have to be
+  // reloaded every sample because the output writes go through float*.
   double sourceSamplePosition = this->sourceSamplePosition_;
   float ampegGain = ampeg_.getLevel();
   float ampegSlope = ampeg_.getSlope();
   int samplesUntilNextAmpSegment = ampeg_.getSamplesUntilNextSegment();
   bool ampSegmentIsExponential = ampeg_.getSegmentIsExponential();
-  const float loopStart = static_cast<float>(this->loopStart_);
-  const float loopEnd = static_cast<float>(this->loopEnd_);
-  const float sampleEnd = static_cast<float>(this->sampleEnd_);
-  // Double-precision loop bounds for the wrap; the float caches above lose
-  // integer precision past 2^24 samples (large SF2 sample pools).
+  const float noteGainL = noteGainLeft_;
+  const float noteGainR = noteGainRight_;
+  const bool bypassFilter = bypassFilter_;
+  // Integer / double loop bounds (exact for any pool size; the old float
+  // caches lost integer precision past 2^24 samples). loopEnd is inclusive.
+  const bool looping = this->loopStart_ < this->loopEnd_;
+  const int loopStartI = static_cast<int>(this->loopStart_);
+  const int loopEndI = static_cast<int>(this->loopEnd_);
+  const int loopLengthI = loopEndI + 1 - loopStartI;
+  const int sampleStartI = static_cast<int>(this->sampleStart_);
+  const double sampleEnd = static_cast<double>(this->sampleEnd_);
   const double loopEndExclusive = static_cast<double>(this->loopEnd_) + 1.0;
   const double loopLength = loopEndExclusive - static_cast<double>(this->loopStart_);
 
@@ -321,6 +424,10 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
   static constexpr int kModUpdateRate = 32;
   int modUpdateCounter = 0;
 
+  // Last post-gain output sample, captured for the declick fade in killNote().
+  float lastL = lastOutL_;
+  float lastR = lastOutR_;
+
   // Real-time per-sample render loop. The interpolation and output writes index
   // the cached audio pointers (inL/inR/outL/outR); this pointer arithmetic
   // (C26481) is bounded by bufferNumSamples / numSamples and must stay branch-
@@ -332,27 +439,40 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
   {
     const int pos = static_cast<int>(sourceSamplePosition);
     const float alpha = static_cast<float>(sourceSamplePosition - pos);
-    const float invAlpha = 1.0f - alpha;
-    int nextPos = pos + 1;
-    if ((loopStart < loopEnd) && (nextPos > loopEnd))
+
+    // 4-point neighbours (pos-1, pos, pos+1, pos+2), loop-aware: taps past
+    // the loop end wrap to the loop start, and once the loop has been taken
+    // the tap before the loop start wraps to the loop end. Everything is
+    // clamped to the region / buffer so no tap can read outside the pool.
+    int p0 = pos - 1;
+    int p2 = pos + 1;
+    int p3 = pos + 2;
+    if (looping)
     {
-      nextPos = static_cast<int>(loopStart);
+      if (p2 > loopEndI)
+        p2 -= loopLengthI;
+      if (p3 > loopEndI)
+        p3 -= loopLengthI;
+      if (p0 < loopStartI && numLoops_ > 0)
+        p0 += loopLengthI;
     }
+    if (p0 < sampleStartI)
+      p0 = sampleStartI;
+    if (p2 > lastIndex)
+      p2 = lastIndex;
+    if (p3 > lastIndex)
+      p3 = lastIndex;
 
-    // Simple linear interpolation with buffer overrun check
-    const float nextL = nextPos < bufferNumSamples ? inL[nextPos] : inL[pos];
-    const float nextR = inR ? (nextPos < bufferNumSamples ? inR[nextPos] : inR[pos]) : nextL;
-    float l = (inL[pos] * invAlpha + nextL * alpha);
-    float r = inR ? (inR[pos] * invAlpha + nextR * alpha) : l;
-
-    //// Simple linear interpolation, old version (possible buffer overrun with non-loop??)
-    // float l = (inL[pos] * invAlpha + inL[nextPos] * alpha);
-    // float r = inR ? (inR[pos] * invAlpha + inR[nextPos] * alpha) : l;
+    float l = hermite4(static_cast<float>(inL[p0]), static_cast<float>(inL[pos]),
+                       static_cast<float>(inL[p2]), static_cast<float>(inL[p3]), alpha) * kToFloat;
+    float r = inR ? hermite4(static_cast<float>(inR[p0]), static_cast<float>(inR[pos]),
+                             static_cast<float>(inR[p2]), static_cast<float>(inR[p3]), alpha) * kToFloat
+                  : l;
 
     // Phase C - LPF (only when not bypassed). Applied before the volume gain
     // so the envelope still shapes the filtered signal. For mono sources r is
     // aliased to l above, so filter once and mirror to keep them coherent.
-    if (!bypassFilter_)
+    if (!bypassFilter)
     {
       l = filterL_.processSingleSampleRaw(l);
       if (inR)
@@ -365,11 +485,10 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
       }
     }
 
-    const float gainLeft = noteGainLeft_ * ampegGain;
-    const float gainRight = noteGainRight_ * ampegGain;
-    l *= gainLeft;
-    r *= gainRight;
-    // Shouldn't we dither here?
+    l *= noteGainL * ampegGain;
+    r *= noteGainR * ampegGain;
+    lastL = l;
+    lastR = r;
 
     if (outR)
     {
@@ -388,7 +507,7 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
     // snapping to loopStart shortened each pass by a varying sub-sample amount,
     // adding a per-cycle phase jump heard as flutter on short sustain loops.
     sourceSamplePosition += effectivePitchRatio;
-    if ((loopStart < loopEnd) && (sourceSamplePosition >= loopEndExclusive))
+    if (looping && (sourceSamplePosition >= loopEndExclusive))
     {
       do
       {
@@ -492,12 +611,16 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
 
     if ((sourceSamplePosition >= sampleEnd) || ampeg_.isDone())
     {
+      lastOutL_ = lastL;
+      lastOutR_ = lastR;
       killNote();
       break;
     }
   }
 #pragma warning(pop)
 
+  lastOutL_ = lastL;
+  lastOutR_ = lastR;
   this->sourceSamplePosition_ = sourceSamplePosition;
   ampeg_.setLevel(ampegGain);
   ampeg_.setSamplesUntilNextSegment(samplesUntilNextAmpSegment);
@@ -558,6 +681,16 @@ void sfzero::Voice::calcPitchRatio()
 
 void sfzero::Voice::killNote()
 {
+  // Hard stop while the voice was still producing output: arm the declick
+  // fade from the last sample so the waveform doesn't step to zero.
+  if (region_ != nullptr && (std::abs(lastOutL_) > kDeclickThreshold || std::abs(lastOutR_) > kDeclickThreshold))
+  {
+    declickL_ = lastOutL_;
+    declickR_ = lastOutR_;
+    declickSamples_ = kDeclickSamples;
+  }
+  lastOutL_ = lastOutR_ = 0.0f;
+
   region_ = nullptr;
   bufferKeepAlive_.reset();
   inL_ = nullptr;

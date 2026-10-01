@@ -109,6 +109,15 @@ struct Region
   // converted to seconds in sf2ToSFZ() like ampeg.
   EGParameters modeg{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 
+  // SF2 key-number envelope scaling, in timecents per key relative to key 60:
+  // hold/decay time *= 2^((60 - key) * value / 1200). A value of 100 halves
+  // the stage time per octave upward - how piano banks make high notes decay
+  // faster than low ones. Applied per note in Voice::startNote().
+  float keynumToVolEnvHold = 0.0f;
+  float keynumToVolEnvDecay = 0.0f;
+  float keynumToModEnvHold = 0.0f;
+  float keynumToModEnvDecay = 0.0f;
+
   // Vibrato LFO. SF2 timecents (delay) and absolute cents (freq) at parse time.
   float delayVibLFO = -12000.0f;        // timecents (~1 ms)
   float freqVibLFO = 0.0f;              // absolute cents (0 -> 8.176 Hz)

@@ -8,10 +8,53 @@
 #define SFZSAMPLE_H_INCLUDED
 
 #include "SFZCommon.h"
+#include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace sfzero
 {
+
+/** 16-bit PCM sample storage, one contiguous block per channel.
+
+    SF2 sample data is 16-bit on disk; keeping it 16-bit in memory halves the
+    footprint of a large bank (a 148 MB GM bank used to expand to ~296 MB of
+    float32, which is what pushed 3 GB phones into jetsam/OOM during a font
+    swap). Voices convert on read - one integer-to-float conversion and a
+    multiply per tap, which the 4-point interpolation dwarfs anyway. */
+class SampleBuffer
+{
+public:
+  SampleBuffer(int numChannels, int numSamples)
+      : numChannels_(numChannels < 1 ? 1 : numChannels), numSamples_(numSamples < 0 ? 0 : numSamples),
+        data_(static_cast<size_t>(numChannels_) * static_cast<size_t>(numSamples_), std::int16_t{0})
+  {
+  }
+
+  int getNumChannels() const noexcept { return numChannels_; }
+  int getNumSamples() const noexcept { return numSamples_; }
+
+  const std::int16_t *getReadPointer(int channel) const noexcept
+  {
+    return data_.data() + static_cast<size_t>(channel) * static_cast<size_t>(numSamples_);
+  }
+  std::int16_t *getWritePointer(int channel) noexcept
+  {
+    return data_.data() + static_cast<size_t>(channel) * static_cast<size_t>(numSamples_);
+  }
+
+  /** Scale factor from int16 to float (-1..1). */
+  static constexpr float kToFloat = 1.0f / 32768.0f;
+
+  /** Quantise float audio (-1..1, clipped) to 16-bit. Used by the WAV/SFZ
+      loader and by tests that synthesise sample data. */
+  static std::shared_ptr<SampleBuffer> fromFloat(const juce::AudioSampleBuffer &source);
+
+private:
+  int numChannels_;
+  int numSamples_;
+  std::vector<std::int16_t> data_;
+};
 
 class Sample
 {
@@ -27,15 +70,18 @@ public:
   // conservative false positive on the File copy).
 #pragma warning(suppress : 26447)
   juce::File getFile() const noexcept { return (file_); }
-  juce::AudioSampleBuffer *getBuffer() const noexcept { return buffer_.get(); }
-  std::shared_ptr<juce::AudioSampleBuffer> getBufferShared() const noexcept { return buffer_; }
+  const SampleBuffer *getSampleData() const noexcept { return buffer_.get(); }
+  std::shared_ptr<SampleBuffer> getSampleDataShared() const noexcept { return buffer_; }
   double getSampleRate() const noexcept { return sampleRate_; }
   juce::String getShortName();
 
   /** Shares ownership of the buffer with the caller. Multiple Samples may share
-      the same underlying AudioSampleBuffer (e.g., the SF2 case where one buffer
-      backs every Sample). */
-  void setBuffer(std::shared_ptr<juce::AudioSampleBuffer> newBuffer) noexcept;
+      the same underlying SampleBuffer (e.g., the SF2 case where one buffer backs
+      every Sample). */
+  void setBuffer(std::shared_ptr<SampleBuffer> newBuffer) noexcept;
+
+  /** Convenience for float sources (WAV loader, tests): quantises to 16-bit. */
+  void setBuffer(std::shared_ptr<juce::AudioSampleBuffer> floatBuffer);
 
   juce::String dump();
   juce::uint64 getSampleLength() const noexcept { return sampleLength_; }
@@ -48,7 +94,7 @@ public:
 
 private:
   juce::File file_;
-  std::shared_ptr<juce::AudioSampleBuffer> buffer_;  ///< Shared buffer; refcount drops to zero when last Sample releases it.
+  std::shared_ptr<SampleBuffer> buffer_;  ///< Shared buffer; refcount drops to zero when last Sample releases it.
   double sampleRate_;
   juce::uint64 sampleLength_, loopStart_, loopEnd_;
 

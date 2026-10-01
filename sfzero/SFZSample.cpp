@@ -7,6 +7,27 @@
 #include "SFZSample.h"
 #include "SFZDebug.h"
 #include "SFZSafeCast.h"
+#include <cmath>
+
+std::shared_ptr<sfzero::SampleBuffer> sfzero::SampleBuffer::fromFloat(const juce::AudioSampleBuffer &source)
+{
+  auto out = std::make_shared<SampleBuffer>(source.getNumChannels(), source.getNumSamples());
+  const int numSamples = source.getNumSamples();
+  for (int ch = 0; ch < source.getNumChannels(); ++ch)
+  {
+    const float *in = source.getReadPointer(ch);
+    std::int16_t *dest = out->getWritePointer(ch);
+    for (int i = 0; i < numSamples; ++i)
+    {
+      // Load-time conversion; sequential walk bounded by numSamples (C26481).
+#pragma warning(suppress : 26481)
+      const float clipped = juce::jlimit(-1.0f, 1.0f, in[i]);
+#pragma warning(suppress : 26481)
+      dest[i] = static_cast<std::int16_t>(std::lrint(clipped * 32767.0f));
+    }
+  }
+  return out;
+}
 
 bool sfzero::Sample::load(juce::AudioFormatManager *formatManager)
 {
@@ -22,8 +43,10 @@ bool sfzero::Sample::load(juce::AudioFormatManager *formatManager)
   // can be done without having to check for the edge all the time.
   jassert(sampleLength_ < std::numeric_limits<int>::max());
 
-  buffer_ = std::make_shared<juce::AudioSampleBuffer>(reader->numChannels, narrowCast<int>(sampleLength_ + 4));
-  reader->read(buffer_.get(), 0, narrowCast<int>(sampleLength_ + 4), 0, true, true);
+  juce::AudioSampleBuffer floatBuffer(reader->numChannels, narrowCast<int>(sampleLength_ + 4));
+  floatBuffer.clear();
+  reader->read(&floatBuffer, 0, narrowCast<int>(sampleLength_ + 4), 0, true, true);
+  buffer_ = SampleBuffer::fromFloat(floatBuffer);
 
   const juce::StringPairArray *metadata = &reader->metadataValues;
   const int numLoops = metadata->getValue("NumSampleLoops", "0").getIntValue();
@@ -37,10 +60,15 @@ bool sfzero::Sample::load(juce::AudioFormatManager *formatManager)
 
 juce::String sfzero::Sample::getShortName() { return (file_.getFileName()); }
 
-void sfzero::Sample::setBuffer(std::shared_ptr<juce::AudioSampleBuffer> newBuffer) noexcept
+void sfzero::Sample::setBuffer(std::shared_ptr<SampleBuffer> newBuffer) noexcept
 {
   buffer_ = std::move(newBuffer);
-  sampleLength_ = buffer_ ? buffer_->getNumSamples() : 0;
+  sampleLength_ = buffer_ ? static_cast<juce::uint64>(buffer_->getNumSamples()) : 0;
+}
+
+void sfzero::Sample::setBuffer(std::shared_ptr<juce::AudioSampleBuffer> floatBuffer)
+{
+  setBuffer(floatBuffer ? SampleBuffer::fromFloat(*floatBuffer) : nullptr);
 }
 
 juce::String sfzero::Sample::dump() { return file_.getFullPathName() + "\n"; }
@@ -56,13 +84,13 @@ void sfzero::Sample::checkIfZeroed(const char *where)
 
   int samplesLeft = buffer_->getNumSamples();
   juce::int64 nonzero = 0, zero = 0;
-  const float *p = buffer_->getReadPointer(0);
+  const std::int16_t *p = buffer_->getReadPointer(0);
   for (; samplesLeft > 0; --samplesLeft)
   {
     // Debug-only zero-check; sequential pointer walk (C26481) over the read
     // pointer is bounded by getNumSamples().
 #pragma warning(suppress : 26481)
-    if (*p++ == 0.0)
+    if (*p++ == 0)
     {
       zero += 1;
     }

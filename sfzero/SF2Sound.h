@@ -15,6 +15,7 @@
 #define SF2SOUND_H_INCLUDED
 
 #include "SFZSound.h"
+#include "SFZSample.h"
 #include <memory>
 
 namespace sfzero
@@ -61,7 +62,7 @@ public:
   int selectedSubsound() override;
 
   Sample *sampleFor(double sampleRate);
-  void setSamplesBuffer(std::shared_ptr<juce::AudioSampleBuffer> buffer);
+  void setSamplesBuffer(std::shared_ptr<SampleBuffer> buffer);
 
   // Access to presets for instancing (SF2SoundInstance)
   int getNumPresets() const noexcept { return presets_.size(); }
