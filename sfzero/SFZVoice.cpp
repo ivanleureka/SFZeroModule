@@ -59,6 +59,10 @@ bool sfzero::Voice::canPlaySound(juce::SynthesiserSound *sound)
 void sfzero::Voice::startNote(int midiNoteNumber, float floatVelocity, juce::SynthesiserSound *soundIn,
                               int currentPitchWheelPosition)
 {
+  // A fresh note has rendered nothing yet: a hard stop before its first block
+  // must not fade out whatever the previous note on this voice left behind.
+  lastOutL_ = lastOutR_ = 0.0f;
+
   // Try regular Sound first, then SF2SoundInstance
   sfzero::Sound *sound = dynamic_cast<sfzero::Sound *>(soundIn);
   sfzero::SF2SoundInstance *soundInstance = nullptr;
@@ -613,8 +617,8 @@ void sfzero::Voice::renderNextBlock(juce::AudioSampleBuffer &outputBuffer, int s
     {
       lastOutL_ = lastL;
       lastOutR_ = lastR;
-      killNote();
-      break;
+      killNote();      // arms the declick from lastOut*, then zeroes it and clears region_
+      return;          // the voice is dead: nothing below (lastOut*, envelopes, position) applies
     }
   }
 #pragma warning(pop)
