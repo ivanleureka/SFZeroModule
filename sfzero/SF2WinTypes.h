@@ -18,6 +18,9 @@ namespace sfzero
 {
 typedef char fourcc[4];
 typedef unsigned char byte;
+// NOTE: `unsigned long` is 4 bytes on Windows but 8 bytes on Android, iOS and
+// macOS (LP64). Use dword only as a value type; never use sizeof(dword) for an
+// on-disk field width (the SF2 "dword" fields are always 4 bytes).
 typedef unsigned long dword;
 typedef unsigned short word;
 

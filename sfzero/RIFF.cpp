@@ -30,16 +30,21 @@ bool sfzero::RIFFChunk::readFrom(juce::InputStream *file)
 
   const juce::int64 headerStart = file->getPosition();
   const int idRead = file->read(idBytes.data(), idLen);
-  const juce::int64 afterId = file->getPosition();
-  const int rawSize = file->readInt();
-  const bool sizeRead = (file->getPosition() - afterId) == narrowCast<juce::int64>(sizeof(sfzero::dword));
 
-  if (idRead != idLen || !sizeRead)
+  // The RIFF size field is always 4 bytes little-endian ON DISK. Do not derive
+  // this width from sizeof(dword): dword is `unsigned long`, which is 4 bytes
+  // on Windows but 8 on Android/iOS/macOS (LP64) - a sizeof-based check there
+  // rejected every SoundFont, bundled included.
+  constexpr int kRiffSizeFieldBytes = 4;
+  char sizeBytes[kRiffSizeFieldBytes] = {};
+  const int sizeRead = file->read(sizeBytes, kRiffSizeFieldBytes);
+
+  if (idRead != idLen || sizeRead != kRiffSizeFieldBytes)
   {
     return fail(headerStart);
   }
 
-  size = sfzero::narrowCast<sfzero::dword>(rawSize);
+  size = sfzero::narrowCast<sfzero::dword>(juce::ByteOrder::littleEndianInt(sizeBytes));
   start = file->getPosition();
 
   if (FourCCEquals(id, "RIFF") || FourCCEquals(id, "LIST"))
