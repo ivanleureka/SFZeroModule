@@ -91,16 +91,28 @@ void sfzero::SF2::Hydra::readFrom(juce::InputStream *file, juce::int64 pdtaChunk
   }                                                                                                                              \
   else
 
-  while (file->getPosition() < pdtaChunkEnd)
+  // Bounded scan: stop on a short header read, on EOF, on a sub-chunk that
+  // claims to extend past pdta (garbage size => huge allocation below), or
+  // when the position fails to advance. isComplete() then reports the hydra
+  // as unusable instead of this loop spinning forever on a truncated file.
+  while (file->getPosition() < pdtaChunkEnd && !file->isExhausted())
   {
+    const juce::int64 before = file->getPosition();
     sfzero::RIFFChunk chunk;
-    chunk.readFrom(file);
+    if (!chunk.readFrom(file) || chunk.end() > pdtaChunkEnd)
+    {
+      return;
+    }
 
     HandleChunk(phdr) HandleChunk(pbag) HandleChunk(pmod) HandleChunk(pgen) HandleChunk(inst) HandleChunk(ibag) HandleChunk(imod)
         HandleChunk(igen) HandleChunk(shdr)
     {
     }
     chunk.seekAfter(file);
+    if (file->getPosition() <= before)
+    {
+      return;
+    }
   }
 }
 

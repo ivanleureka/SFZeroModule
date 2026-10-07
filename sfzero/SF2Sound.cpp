@@ -74,7 +74,12 @@ void sfzero::SF2Sound::loadRegions()
   PresetComparator comparator;
   presets_.sort(comparator);
 
-  useSubsound(0);
+  // A file the reader rejected (not an SF2, truncated, empty hydra) has no
+  // presets; selecting preset 0 would dereference a null entry.
+  if (!presets_.isEmpty())
+  {
+    useSubsound(0);
+  }
 }
 
 void sfzero::SF2Sound::loadSamples(juce::AudioFormatManager * /*formatManager*/, double *progressVar, juce::Thread *thread)
@@ -99,6 +104,7 @@ void sfzero::SF2Sound::loadSamples(juce::AudioFormatManager * /*formatManager*/,
     buffer = reader.readSamples(progressVar, thread);
   }
 
+  hasSampleData_ = (buffer != nullptr);
   if (buffer)
   {
     // All the SFZSamples will share the buffer.
@@ -125,6 +131,11 @@ juce::String sfzero::SF2Sound::subsoundName(int whichSubsound)
   const Preset *preset = presets_[whichSubsound];
   juce::String result;
 
+  if (preset == nullptr)
+  {
+    return result;
+  }
+
   if (preset->bank != 0)
   {
     result += preset->bank;
@@ -140,9 +151,13 @@ void sfzero::SF2Sound::useSubsound(int whichSubsound)
 {
   selectedPreset_ = whichSubsound;
   getRegions().clear();
-  // juce::OwnedArray::operator[] is range-safe (returns nullptr if out of range).
+  // juce::OwnedArray::operator[] is range-safe (returns nullptr if out of range);
+  // an out-of-range index or an empty preset list just leaves the regions cleared.
 #pragma warning(suppress : 26446)
-  getRegions().addArray(presets_[whichSubsound]->regions);
+  if (const Preset *preset = presets_[whichSubsound])
+  {
+    getRegions().addArray(preset->regions);
+  }
 }
 
 int sfzero::SF2Sound::selectedSubsound() { return selectedPreset_; }

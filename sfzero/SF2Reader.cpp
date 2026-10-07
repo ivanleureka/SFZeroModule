@@ -19,6 +19,37 @@ namespace
 {
 // initialAttenuation: dB per generator unit. See addGeneratorToRegion().
 constexpr float kAttenuationDbPerUnit = 0.04f;
+
+/** Walks the sub-chunks between the current position and `end`, calling
+    `onFound(chunk)` and returning true for the first chunk whose id matches.
+    Returns false when the id is not found, the stream is exhausted, a chunk
+    header can't be read in full, or seekAfter() fails to advance - all of
+    which happen on a truncated or garbage file, and all of which previously
+    spun the caller's while-loop forever. */
+template <typename OnFound>
+bool scanChunks(juce::InputStream *file, juce::int64 end, const char *wantedId, OnFound &&onFound)
+{
+  while (file->getPosition() < end && !file->isExhausted())
+  {
+    const juce::int64 before = file->getPosition();
+    sfzero::RIFFChunk chunk;
+    if (!chunk.readFrom(file))
+    {
+      return false;
+    }
+    if (FourCCEquals(chunk.id, wantedId))
+    {
+      onFound(chunk);
+      return true;
+    }
+    chunk.seekAfter(file);
+    if (file->getPosition() <= before)
+    {
+      return false;
+    }
+  }
+  return false;
+}
 }
 
 sfzero::SF2Reader::SF2Reader(sfzero::SF2Sound *soundIn, const juce::File &fileIn)
@@ -47,17 +78,20 @@ void sfzero::SF2Reader::read()
   sfzero::SF2::Hydra hydra;
   file_->setPosition(0);
   sfzero::RIFFChunk riffChunk;
-  riffChunk.readFrom(file_.get());
-  while (file_->getPosition() < riffChunk.end())
+  if (!riffChunk.readFrom(file_.get()) || riffChunk.type != sfzero::RIFFChunk::RIFF || !FourCCEquals(riffChunk.id, "sfbk"))
   {
-    sfzero::RIFFChunk chunk;
-    chunk.readFrom(file_.get());
-    if (FourCCEquals(chunk.id, "pdta"))
-    {
-      hydra.readFrom(file_.get(), chunk.end());
-      break;
-    }
-    chunk.seekAfter(file_.get());
+    sound_->addError("Not an SF2 file (missing RIFF/sfbk header).");
+    return;
+  }
+  // Bounded scan (see scanChunks): a truncated file - valid header, data cut
+  // short - used to spin here forever because a short read left the position
+  // unchanged while it was still < riffChunk.end().
+  const bool foundPdta = scanChunks(file_.get(), riffChunk.end(), "pdta",
+                                    [&](const sfzero::RIFFChunk &chunk) { hydra.readFrom(file_.get(), chunk.end()); });
+  if (!foundPdta)
+  {
+    sound_->addError("Invalid SF2 file (missing \"pdta\" chunk or file truncated).");
+    return;
   }
   if (!hydra.isComplete())
   {
@@ -230,42 +264,27 @@ std::shared_ptr<sfzero::SampleBuffer> sfzero::SF2Reader::readSamples(double *pro
   // Find the "sdta" chunk.
   file_->setPosition(0);
   sfzero::RIFFChunk riffChunk;
-  riffChunk.readFrom(file_.get());
-  bool foundSdta = false;
-  sfzero::RIFFChunk chunk;
-  while (file_->getPosition() < riffChunk.end())
+  if (!riffChunk.readFrom(file_.get()) || riffChunk.type != sfzero::RIFFChunk::RIFF)
   {
-    chunk.readFrom(file_.get());
-    if (FourCCEquals(chunk.id, "sdta"))
-    {
-      foundSdta = true;
-      break;
-    }
-    chunk.seekAfter(file_.get());
+    sound_->addError("Not an SF2 file (missing RIFF header).");
+    return nullptr;
   }
-  // Guard: if no "sdta" chunk was found, `chunk` describes the last chunk we
-  // scanned (or is zero-initialised) and chunk.end() would be meaningless — bail
-  // before reading it. (Fixes C6001: read of uninitialised/stale chunk.end().)
+  // Guard: if no "sdta" chunk is found, `chunk` would describe the last chunk
+  // scanned (or be zero-initialised) and chunk.end() would be meaningless -
+  // bail before reading it. Both scans are bounded (see scanChunks), so a
+  // truncated file fails here instead of looping forever.
+  sfzero::RIFFChunk chunk;
+  const bool foundSdta = scanChunks(file_.get(), riffChunk.end(), "sdta", [&](const sfzero::RIFFChunk &c) { chunk = c; });
   if (!foundSdta)
   {
-    sound_->addError("SF2 is missing its \"sdta\" chunk.");
+    sound_->addError("SF2 is missing its \"sdta\" chunk (or the file is truncated).");
     return nullptr;
   }
   const juce::int64 sdtaEnd = chunk.end();
-  bool found = false;
-  while (file_->getPosition() < sdtaEnd)
-  {
-    chunk.readFrom(file_.get());
-    if (FourCCEquals(chunk.id, "smpl"))
-    {
-      found = true;
-      break;
-    }
-    chunk.seekAfter(file_.get());
-  }
+  const bool found = scanChunks(file_.get(), sdtaEnd, "smpl", [&](const sfzero::RIFFChunk &c) { chunk = c; });
   if (!found)
   {
-    sound_->addError("SF2 is missing its \"smpl\" chunk.");
+    sound_->addError("SF2 is missing its \"smpl\" chunk (or the file is truncated).");
     return nullptr;
   }
 

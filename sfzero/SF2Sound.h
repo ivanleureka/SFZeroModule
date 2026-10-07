@@ -64,6 +64,11 @@ public:
   Sample *sampleFor(double sampleRate);
   void setSamplesBuffer(std::shared_ptr<SampleBuffer> buffer);
 
+  /** True once loadSamples() has read the sample pool. False means the file
+      had no usable sdta/smpl data (missing or truncated); regions would then
+      point at samples with no buffer, so the sound must not be installed. */
+  bool hasSampleData() const noexcept { return hasSampleData_; }
+
   // Access to presets for instancing (SF2SoundInstance)
   int getNumPresets() const noexcept { return presets_.size(); }
   // juce::OwnedArray::operator[] is range-safe (returns nullptr if out of range).
@@ -77,6 +82,7 @@ private:
   juce::OwnedArray<Sample> samplesStorage_;     ///< Sole owner of Sample objects.
   juce::HashMap<int, Sample *> samplesByRate_;  ///< Borrowed lookup keyed by sample-rate.
   int selectedPreset_;
+  bool hasSampleData_ = false;
 
   // For memory-based loading (e.g., from BinaryData)
   std::unique_ptr<juce::MemoryInputStream> memoryStream_;

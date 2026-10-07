@@ -26,7 +26,12 @@ struct RIFFChunk
   Type type = Custom;
   juce::int64 start = 0;
 
-  void readFrom(juce::InputStream *file);
+  /** Reads the chunk header at the current position. Returns false (and
+      zeroes the chunk) when the stream ended before a complete header could
+      be read - i.e. the file is truncated. Callers scanning for chunks must
+      stop on false; otherwise a short read leaves the position unchanged and
+      the scan loops forever. */
+  bool readFrom(juce::InputStream *file);
   void seek(juce::InputStream *file);
   void seekAfter(juce::InputStream *file);
 

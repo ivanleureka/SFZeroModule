@@ -8,26 +8,47 @@
 #include "SFZSafeCast.h"
 #include <span>
 
-void sfzero::RIFFChunk::readFrom(juce::InputStream *file)
+bool sfzero::RIFFChunk::readFrom(juce::InputStream *file)
 {
   // span view over the fourcc so the read target is bounds-described rather
   // than relying on array-to-pointer decay.
   const std::span<char> idBytes{id};
-  file->read(idBytes.data(), narrowCast<int>(idBytes.size()));
-  size = sfzero::narrowCast<sfzero::dword>(file->readInt());
+  const int idLen = narrowCast<int>(idBytes.size());
+
+  const auto fail = [&](juce::int64 headerStart) {
+    // Truncated header: leave a well-defined (empty) chunk so a stale id from
+    // a previous read can't be mistaken for a real chunk.
+    for (auto &b : idBytes)
+    {
+      b = 0;
+    }
+    size = 0;
+    type = Custom;
+    start = headerStart;
+    return false;
+  };
+
+  const juce::int64 headerStart = file->getPosition();
+  const int idRead = file->read(idBytes.data(), idLen);
+  const juce::int64 afterId = file->getPosition();
+  const int rawSize = file->readInt();
+  const bool sizeRead = (file->getPosition() - afterId) == narrowCast<juce::int64>(sizeof(sfzero::dword));
+
+  if (idRead != idLen || !sizeRead)
+  {
+    return fail(headerStart);
+  }
+
+  size = sfzero::narrowCast<sfzero::dword>(rawSize);
   start = file->getPosition();
 
-  if (FourCCEquals(id, "RIFF"))
+  if (FourCCEquals(id, "RIFF") || FourCCEquals(id, "LIST"))
   {
-    type = RIFF;
-    file->read(idBytes.data(), narrowCast<int>(idBytes.size()));
-    start += sizeof(sfzero::fourcc);
-    size -= sizeof(sfzero::fourcc);
-  }
-  else if (FourCCEquals(id, "LIST"))
-  {
-    type = LIST;
-    file->read(idBytes.data(), narrowCast<int>(idBytes.size()));
+    type = FourCCEquals(id, "RIFF") ? RIFF : LIST;
+    if (file->read(idBytes.data(), idLen) != idLen || size < sizeof(sfzero::fourcc))
+    {
+      return fail(headerStart);
+    }
     start += sizeof(sfzero::fourcc);
     size -= sizeof(sfzero::fourcc);
   }
@@ -35,6 +56,7 @@ void sfzero::RIFFChunk::readFrom(juce::InputStream *file)
   {
     type = Custom;
   }
+  return true;
 }
 
 void sfzero::RIFFChunk::seek(juce::InputStream *file) { file->setPosition(start); }
